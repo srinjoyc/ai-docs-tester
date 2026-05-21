@@ -1,0 +1,59 @@
+id: zerodev-03-batch-userop
+vendor: zerodev
+title: Let users claim rewards and mint in one click (batch transaction)
+difficulty: 2
+tags: [basic, batching]
+
+prompt: |
+  The starter app lets users mint an NFT using a ZeroDev smart account.
+
+  Your task: add a "Claim & Mint" flow that does two things in a single transaction
+  so the user only has to confirm once:
+    1. Calls a no-op "claim" on a rewards contract (REWARDS_CONTRACT env var,
+       function selector 0x4e71d92d — claimRewards())
+    2. Calls mint(address) on the NFT contract (NFT_CONTRACT from lib/config.ts)
+
+  Create lib/batch.ts that exports sendClaimAndMint():
+    - Gets the Kernel account client (reuse or re-implement getKernelClient from lib/account.ts)
+    - Bundles both calls into a single userOp using the calls array
+    - Returns the userOp hash
+
+  Update components/MintButton.tsx to add a "Claim & Mint" button that calls
+  sendClaimAndMint() and displays the userOp hash on success.
+
+  Use @zerodev/sdk and viem. Sponsor gas via the ZeroDev paymaster. Read env vars
+  from lib/config.ts.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/ecdsa-validator"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+    - "sendUserOperation"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 6
+  max_seconds: 180
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Click "Claim & Mint". This should send a single userOp that performs both
+    a claim and a mint atomically.
+  checklist:
+    - "Page loads with no console errors"
+    - "A 'Claim & Mint' button is visible"
+    - "Clicking it shows a single userOp hash (both calls in one transaction)"
+    - "No second confirmation or separate hash appears"

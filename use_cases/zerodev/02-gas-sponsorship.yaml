@@ -1,0 +1,53 @@
+id: zerodev-02-sponsored-mint
+vendor: zerodev
+title: Add ZeroDev paymaster so the mint userOp is gas-free for the user
+difficulty: 2
+tags: [basic, gas-sponsorship]
+
+prompt: |
+  Wire up a ZeroDev paymaster so the NFT mint UserOperation is gas-free for the user.
+
+  What needs to change:
+  - src/components/MintButton.tsx: attach a ZeroDev paymaster client to the
+    KernelAccountClient using createZeroDevPaymasterClient and PAYMASTER_URL from
+    config.ts, so sendUserOperation sponsors gas automatically. Display the userOp
+    hash with "(gas sponsored)" in the status message.
+
+  Files: src/lib/config.ts (BUNDLER_URL, PAYMASTER_URL, NFT_CONTRACT, NFT_ABI),
+  src/components/MintButton.tsx
+  @zerodev/sdk, @zerodev/ecdsa-validator, permissionless are installed. Use viem, not ethers.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/ecdsa-validator"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+    - "createZeroDevPaymasterClient"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: e2e
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/e2e.sh
+  env:
+    REQUIRE_GAS_SPONSORED: "true"
+
+budget:
+  max_turns: 8
+  max_seconds: 240
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Click "Mint NFT". The status message should include "(gas sponsored)"
+    and display a userOp hash.
+  checklist:
+    - "Page loads with no console errors"
+    - "A 'Mint NFT' button is visible"
+    - "Clicking shows a userOp hash AND the text '(gas sponsored)'"

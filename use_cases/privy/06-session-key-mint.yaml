@@ -1,0 +1,65 @@
+id: privy-06-session-key-mint
+vendor: privy
+title: Let the app mint on the user's behalf without prompting every time
+difficulty: 3
+tags: [session-keys, delegation]
+
+prompt: |
+  The starter app requires the user to approve every mint. Your task: add a
+  "Enable Auto-Mint" flow where the user approves once and the app can mint
+  on their behalf for the rest of the session without further prompts.
+
+  Create src/lib/sessionKey.ts that exports two functions:
+
+  1. createMintSessionKey(smartWallet):
+     - Accepts a Privy smart wallet (from useSmartWallets())
+     - Creates a session key scoped to NFT_CONTRACT (from src/lib/privyConfig.ts)
+       that expires 24 hours from now
+     - Stores the session key credentials in localStorage
+     - Returns the session key client or delegate credentials
+
+  2. getMintSessionClient():
+     - Reads the stored session key from localStorage
+     - Returns a client that can call mint() without a user prompt
+     - Returns null if no valid session key exists
+
+  Update src/App.tsx:
+    - Add an "Enable Auto-Mint" button that calls createMintSessionKey()
+    - Once enabled, show a "Auto-Mint" button that calls mint via getMintSessionClient()
+    - Show a countdown or "Auto-mint enabled" indicator
+
+  Use useSmartWallets() from "@privy-io/react-auth/smart-wallets".
+  Use viem for ABI encoding. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "viem"
+  calls:
+    - "useSmartWallets"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in, click "Enable Auto-Mint" to create a session key scoped to the
+    NFT contract, then click "Auto-Mint". The second mint should run without
+    any wallet confirmation prompt.
+  checklist:
+    - "An 'Enable Auto-Mint' button appears after login"
+    - "Clicking it creates a session key and shows 'Auto-mint enabled' or similar"
+    - "An 'Auto-Mint' button appears"
+    - "Clicking 'Auto-Mint' mints without a wallet prompt"
+    - "A transaction hash is shown"

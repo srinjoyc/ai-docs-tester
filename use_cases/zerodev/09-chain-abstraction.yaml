@@ -1,0 +1,56 @@
+id: zerodev-09-chain-abstraction
+vendor: zerodev
+title: Let users mint on any chain using funds held on a different chain
+difficulty: 4
+tags: [chain-abstraction]
+
+prompt: |
+  The starter app mints an NFT on Sepolia. Your task: upgrade it so the user can
+  pay for the mint using ETH or USDC they already hold on Base — without manually
+  bridging first. The app handles the cross-chain gas coordination invisibly.
+
+  Update lib/account.ts to export getKernelClient(targetChain):
+    - Creates a Kernel account that supports chain abstraction
+    - When targetChain is "optimism-sepolia", the userOp executes there
+    - Gas is paid from the user's balance on Base Sepolia (FUNDING_CHAIN="base-sepolia")
+    - Use the ZeroDev intent / chain abstraction API (do not manually bridge)
+    - Sponsor residual gas via the ZeroDev paymaster as a fallback
+    - Returns a KernelAccountClient configured for targetChain
+
+  Update pages/index.tsx to show a chain selector (Base Sepolia → OP Sepolia).
+  Update components/MintButton.tsx to call getKernelClient("optimism-sepolia") and
+  send the mint userOp on OP Sepolia, with status showing which chain was used.
+
+  Use ZERODEV_PROJECT_ID env var. Use viem, not ethers. Read config from lib/config.ts.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+  forbidden:
+    - "ethers"
+  chain: optimism-sepolia
+
+grader:
+  type: compile
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Select "OP Sepolia" in the chain selector, then click "Mint NFT". The
+    transaction should execute on Optimism Sepolia with gas sourced from Base.
+  checklist:
+    - "Page loads with no console errors"
+    - "A chain selector showing Base Sepolia and OP Sepolia is visible"
+    - "Selecting OP Sepolia and clicking mint shows a userOp hash"
+    - "The status message indicates which chain was used"

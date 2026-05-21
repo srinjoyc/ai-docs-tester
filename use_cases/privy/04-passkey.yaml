@@ -1,0 +1,58 @@
+id: privy-04-passkey
+vendor: privy
+title: Let users sign in with Face ID or fingerprint via Privy
+difficulty: 2
+tags: [passkey, webauthn]
+
+prompt: |
+  The starter app uses Privy's default login (email/social). Your task: add a
+  "Sign in with Face ID / Touch ID" option so users can log in with biometrics
+  — no password, no seed phrase.
+
+  1. Update src/components/LoginButton.tsx:
+     - Add a "Sign in with passkey" button alongside the existing login button
+     - On click, call loginWithPasskey() from usePrivy() to trigger biometric auth
+     - If the user doesn't have a passkey registered yet, call
+       createPasskey() (also from usePrivy()) to register one, then proceed
+     - Show a "Registered passkey" status when a new one is created
+
+  2. Update src/main.tsx to configure the PrivyProvider for passkey login:
+     - Add loginMethods: ["passkey"] (or add it to the existing list)
+     - Enable embedded wallet creation on login so the user gets a wallet automatically
+
+  3. The MintButton.tsx should still work unchanged after passkey login — the
+     embedded wallet is created the same way regardless of login method.
+
+  Use @privy-io/react-auth. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+  calls:
+    - "usePrivy"
+    - "loginWithPasskey"
+  forbidden:
+    - "ethers"
+    - "@zerodev/passkey-validator"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 8
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Click "Sign in with passkey". The browser should prompt for biometric
+    authentication (Touch ID / Face ID / Windows Hello / security key).
+  checklist:
+    - "A 'Sign in with passkey' button appears alongside the regular login button"
+    - "Clicking it triggers a browser biometric or security key prompt"
+    - "After authentication the user is logged in and the mint UI appears"
+    - "MintButton still works as expected after passkey login"

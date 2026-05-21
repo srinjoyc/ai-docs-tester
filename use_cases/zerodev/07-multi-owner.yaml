@@ -1,0 +1,61 @@
+id: zerodev-07-multi-owner
+vendor: zerodev
+title: Require two team members to approve before the wallet can mint
+difficulty: 3
+tags: [multi-owner, weighted-ecdsa]
+
+prompt: |
+  The starter app lets a single user mint an NFT. Your task: upgrade the wallet to
+  a team wallet that requires 2 out of 3 designated owners to approve each mint —
+  like a company expense policy where no one person can act alone.
+
+  Create lib/teamAccount.ts that exports getTeamKernelClient(signers):
+    - Accepts an array of three signer objects (each created from a private key)
+    - Creates a Kernel account on Sepolia where any 2 of the 3 must co-sign
+    - Uses weighted ECDSA: each owner has weight 1, the approval threshold is 2
+    - Attaches gas sponsorship via the ZeroDev paymaster
+    - Returns a KernelAccountClient
+
+  Update pages/index.tsx to show three private key inputs (OWNER_1, OWNER_2,
+  OWNER_3 from env vars). Wire the first two (PRIVATE_KEY_1, PRIVATE_KEY_2 env vars)
+  as the signing pair and display the shared smart account address.
+
+  Update components/MintButton.tsx to use getTeamKernelClient() with the two
+  available signers to send the mint userOp.
+
+  Use @zerodev/weighted-ecdsa-validator and @zerodev/sdk. Use viem, not ethers.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/weighted-ecdsa-validator"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+    - "toWeightedECDSAValidator"
+  forbidden:
+    - "ethers"
+    - "@zerodev/ecdsa-validator"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 8
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Load the page. The shared team wallet address should appear, showing it
+    is configured with a 2-of-3 weighted ECDSA policy.
+  checklist:
+    - "Page loads with no console errors"
+    - "A smart account address (the shared team wallet) is shown"
+    - "The UI indicates a multi-owner or 2-of-3 approval policy is configured"
+    - "The 'Mint NFT' button attempts to send a co-signed userOp"

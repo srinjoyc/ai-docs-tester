@@ -1,0 +1,71 @@
+id: privy-12-zerodev-kernel
+vendor: privy
+title: Use the Privy embedded wallet as the signer for a ZeroDev smart account
+difficulty: 3
+tags: [basic, integration:zerodev]
+
+# Integration use case: tests Privy docs on how to wire the embedded wallet
+# into ZeroDev. Same scenario as zerodev-12-privy-signer but from Privy's side.
+# Compare pass rates across privy-current and zerodev-current to see which
+# docs better explain the integration.
+
+prompt: |
+  The starter app has Privy login and a MintButton stub. Your task: implement the
+  smart account bridge — when the user logs in with Privy, their embedded wallet
+  becomes the signer for a ZeroDev Kernel smart account, which is what actually
+  sends the mint transaction.
+
+  Implement src/lib/kernelAccount.ts — export getKernelClientFromPrivy(walletClient):
+    - Accepts a viem WalletClient built from the Privy embedded wallet's provider
+    - Converts it to a smart account signer using permissionless utilities
+    - Creates a ZeroDev Kernel account on Sepolia with that signer
+    - Attaches the ZeroDev paymaster for gas sponsorship
+      (BUNDLER_URL and PAYMASTER_URL from src/lib/privyConfig.ts)
+    - Returns a KernelAccountClient
+
+  Implement src/components/MintButton.tsx:
+    - Use useWallets() from @privy-io/react-auth to get the embedded wallet
+    - Build a viem WalletClient from the wallet's EIP-1193 provider
+    - Call getKernelClientFromPrivy(walletClient) to get the Kernel client
+    - Send a mint(address) userOp to NFT_CONTRACT on Sepolia
+    - Display "Minted via ZeroDev! userOp: <hash>"
+
+  Use @privy-io/react-auth, @zerodev/sdk, @zerodev/ecdsa-validator, permissionless,
+  and viem. Read config from src/lib/privyConfig.ts.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "@zerodev/sdk"
+    - "@zerodev/ecdsa-validator"
+    - "permissionless"
+    - "viem"
+  calls:
+    - "useWallets"
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+    - "walletClientToSmartAccountSigner"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-zerodev-base/setup.sh
+  run: ./graders/privy-zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in with Privy, then click "Mint NFT". The mint should use a ZeroDev
+    Kernel account with the Privy embedded wallet as the signer.
+  checklist:
+    - "Login with Privy works (email, social, or passkey)"
+    - "After login, 'Mint NFT' button is visible"
+    - "Clicking it shows 'Minted via ZeroDev! userOp: 0x...' in the status"
+    - "The status message explicitly mentions 'ZeroDev' or 'userOp' (not just 'tx')"

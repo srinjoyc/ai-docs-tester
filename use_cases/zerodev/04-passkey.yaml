@@ -1,0 +1,63 @@
+id: zerodev-04-passkey
+vendor: zerodev
+title: Let users sign in with Face ID or fingerprint (no seed phrase)
+difficulty: 3
+tags: [passkey, webauthn]
+
+prompt: |
+  The starter app lets users mint an NFT using a ZeroDev smart account backed by
+  a private key. Your task: replace the private key login with a passkey so users
+  sign in using Face ID, Touch ID, or a hardware key — no seed phrase needed.
+
+  Update lib/account.ts to export getKernelClient() using a passkey signer:
+    - Register or retrieve a passkey tied to the user's device
+      (use PASSKEY_SERVER_URL env var for the ZeroDev passkey server URL)
+    - Create a Kernel account on Sepolia using the passkey as the validator
+    - Sponsor gas via the ZeroDev paymaster (PAYMASTER_URL from lib/config.ts)
+    - Return a KernelAccountClient ready to send userOps
+
+  Update pages/index.tsx to show a "Sign in with Passkey" button. On click:
+    - Call getKernelClient(), display the smart account address
+    - Enable the MintButton once signed in
+
+  The passkey should persist across page refreshes — if the user already has one
+  registered, retrieve it rather than registering a new one.
+
+  Use @zerodev/passkey-validator and @zerodev/sdk. Use viem, not ethers.
+  Read all config from lib/config.ts and env vars.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/passkey-validator"
+    - "viem"
+  calls:
+    - "toPasskeyValidator"
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+  forbidden:
+    - "ethers"
+    - "@zerodev/ecdsa-validator"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 8
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Click "Sign in with Passkey". The browser should prompt for biometric
+    authentication. After auth, the smart account address should appear.
+  checklist:
+    - "Page loads with no console errors"
+    - "A passkey sign-in button is visible"
+    - "Clicking it triggers a browser biometric prompt (Touch ID / Face ID / security key)"
+    - "After authentication, a smart account address (0x...) is shown"
+    - "A 'Mint NFT' button appears and is clickable"

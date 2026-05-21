@@ -1,0 +1,68 @@
+id: privy-11-automated-executor
+vendor: privy
+title: Let a background service mint for users automatically without prompting them
+difficulty: 5
+tags: [session-keys, automation]
+
+prompt: |
+  The starter app mints only when the user clicks a button. Your task: add a
+  "subscribe" flow where users opt in to automatic minting by a backend service —
+  no wallet prompt needed after the initial approval.
+
+  Create src/lib/automation.ts that exports two functions:
+
+  1. subscribeToAutoMint(smartWallet):
+     - Accepts the Privy smart wallet from useSmartWallets()
+     - Creates a session key scoped to NFT_CONTRACT with a 7-day expiry
+     - The session key should only be permitted to call mint(address) on NFT_CONTRACT
+     - Serializes the session key credentials (private key + policy) to a format
+       that can be sent to a backend (return as a JSON string)
+     - Stores the subscription state in localStorage
+
+  2. exportSessionKeyForServer():
+     - Returns the stored session key JSON from localStorage
+     - The backend can use this to call mint() on behalf of the user
+
+  Create scripts/autoMintServer.ts (a Node.js script, not a React component) that:
+    - Reads the session key JSON from process.env.SESSION_KEY_JSON
+    - Uses it to send a mint(address) userOp to NFT_CONTRACT on Sepolia
+      without any user interaction
+    - Logs "Auto-minted for <address>: <txHash>"
+    This script demonstrates the server side of the session key flow.
+
+  Update src/App.tsx to add a "Subscribe to Auto-Mint" button that calls
+  subscribeToAutoMint() and shows the exported session key for copying.
+
+  Use useSmartWallets() from "@privy-io/react-auth/smart-wallets".
+  Use viem. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "viem"
+  calls:
+    - "useSmartWallets"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 12
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in and click "Subscribe to Auto-Mint". A session key JSON string should
+    be generated and displayed on screen for the backend to use.
+  checklist:
+    - "After login, a 'Subscribe to Auto-Mint' button appears"
+    - "Clicking it generates and displays a session key JSON string on screen"
+    - "The JSON is copyable and contains session key credentials"
+    - "localStorage shows a subscription state (check DevTools > Application > Local Storage)"

@@ -1,0 +1,49 @@
+id: privy-02-sponsored-mint
+vendor: privy
+title: Sponsor gas so users can mint without needing ETH
+difficulty: 2
+tags: [basic, gas-sponsorship]
+
+prompt: |
+  Add gas-sponsored minting via Privy smart wallets so users pay zero ETH.
+
+  What needs to change:
+  - src/pages/_app.tsx: configure PrivyProvider with smart wallet support using
+    SPONSORSHIP_POLICY_ID from config.ts
+  - src/components/MintButton.tsx: replace useWriteContract with useSmartWallets —
+    get the smart wallet client and call writeContract to mint NFT_CONTRACT with NFT_ABI.
+    Gas must be sponsored (user pays 0 ETH).
+
+  Files: src/lib/config.ts (PRIVY_APP_ID, SPONSORSHIP_POLICY_ID, NFT_CONTRACT, NFT_ABI),
+  src/pages/_app.tsx, src/components/MintButton.tsx
+  @privy-io/react-auth is installed.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+  calls:
+    - "useSmartWallets"
+  forbidden:
+    - "ethers"
+    - "useWallets"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 8
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in with Privy, then click "Mint NFT". The transaction should succeed
+    without ETH in the wallet because gas is sponsored.
+  checklist:
+    - "Page loads and login works"
+    - "Clicking 'Mint NFT' does not prompt for gas payment"
+    - "Status shows 'Minted (gas sponsored)! tx: 0x...' with a transaction hash"

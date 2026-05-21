@@ -1,0 +1,52 @@
+id: privy-01-embedded-wallet-mint
+vendor: privy
+title: Upgrade a RainbowKit dApp to use Privy embedded wallets for minting
+difficulty: 1
+tags: [basic]
+
+prompt: |
+  Replace the RainbowKit/wagmi auth flow with Privy embedded wallets.
+
+  What needs to change:
+  - src/pages/_app.tsx: swap RainbowKitProvider for PrivyProvider (use PRIVY_APP_ID from config.ts)
+  - src/pages/index.tsx: replace ConnectButton with a Privy login button and logged-in state
+  - src/components/MintButton.tsx: replace useWriteContract with the user's Privy embedded
+    wallet — get the wallet via useWallets(), obtain its EIP-1193 provider, wrap it in a
+    viem WalletClient, and call writeContract to mint NFT_CONTRACT with NFT_ABI
+
+  Files: src/lib/config.ts (PRIVY_APP_ID, NFT_CONTRACT, NFT_ABI), src/pages/_app.tsx,
+  src/pages/index.tsx, src/components/MintButton.tsx
+  @privy-io/react-auth is installed.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "viem"
+  calls:
+    - "useWallets"
+    - "createWalletClient"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 12
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Click "Log in with Privy", complete the auth flow, then click "Mint NFT"
+    to send a real transaction from the embedded wallet.
+  checklist:
+    - "Page loads with 'Log in with Privy' button visible and no console errors"
+    - "Clicking login opens the Privy auth modal"
+    - "After login, 'Wallet connected — ready to mint.' appears"
+    - "Clicking 'Mint NFT' shows a loading/minting state"
+    - "Status updates to 'Minted! tx: 0x...' with a real transaction hash"

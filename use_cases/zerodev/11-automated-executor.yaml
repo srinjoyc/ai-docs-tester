@@ -1,0 +1,70 @@
+id: zerodev-11-automated-executor
+vendor: zerodev
+title: Let a background service mint for users automatically without prompting them
+difficulty: 5
+tags: [session-keys, permissions, automation]
+
+prompt: |
+  The starter app requires a user to click "Mint NFT" each time. Your task: add
+  an "auto-mint" mode where a backend service can mint on the user's behalf on a
+  schedule — the user authorizes once upfront, and the backend acts autonomously.
+
+  Create lib/autoMint.ts with two exports:
+
+  1. grantAutoMintPermission():
+     - Creates a Kernel account on Sepolia from PRIVATE_KEY (lib/config.ts)
+     - Generates a backend key (BACKEND_PRIVATE_KEY env var, or random if absent)
+     - Grants that key permission to call mint(address) on NFT_CONTRACT only,
+       with zero ETH spend limit and a 7-day expiry
+     - Serializes the session key config to a JSON string (for the backend to store)
+     - Returns { backendKeyAddress, serializedConfig }
+
+  2. autoMint(serializedConfig):
+     - Reconstructs a KernelAccountClient from the serialized config
+     - Sends a mint(address) userOp to NFT_CONTRACT targeting the smart account's
+       own address
+     - Returns the userOp hash
+     This function should work without any user interaction — backend-only.
+
+  Update pages/index.tsx to add an "Enable Auto-Mint" button that calls
+  grantAutoMintPermission() and displays the backend key address and expiry.
+
+  Also implement lib/account.ts with a basic getKernelClient() (ECDSA, Sepolia,
+  with paymaster).
+
+  Use @zerodev/permissions or @zerodev/session-key. Use viem, not ethers.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/permissions"
+    - "viem"
+  calls:
+    - "toECDSASigner"
+    - "toPermissionValidator"
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 12
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Click "Enable Auto-Mint" to grant the backend key permission. Verify the
+    backend key address, session expiry, and serialized config are shown.
+  checklist:
+    - "Page loads with no console errors"
+    - "An 'Enable Auto-Mint' button is visible"
+    - "Clicking it shows a backend key address (0x...) and a 7-day expiry"
+    - "A serialized session key config (JSON string) is displayed for copying to the server"

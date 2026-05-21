@@ -1,0 +1,65 @@
+id: zerodev-10-spending-limit
+vendor: zerodev
+title: Cap how much the app can spend per day on the user's behalf
+difficulty: 4
+tags: [spending-limit, modules]
+
+prompt: |
+  The starter app uses a session key so the backend can mint on the user's behalf.
+  Your task: add a daily spending limit to that session key — the backend can mint
+  freely, but if it tries to transfer more than 0.01 ETH in a 24-hour window the
+  transaction should be automatically blocked.
+
+  Create lib/limitedSession.ts that exports createLimitedSessionKey():
+    - Creates a Kernel account on Sepolia from PRIVATE_KEY (lib/config.ts)
+    - Generates a session key (random private key) for the backend to use
+    - Grants the session key permission to:
+        - Call NFT_CONTRACT (lib/config.ts) — mint function only
+        - Transfer no more than 0.01 ETH total per day
+    - Sets the session key to expire 7 days from now
+    - Returns { sessionKeyAddress, sessionKeyClient }
+
+  The sessionKeyClient should be usable exactly like a regular KernelAccountClient
+  but any attempt to exceed the daily limit should fail at the validation layer,
+  not at the app level.
+
+  Also implement lib/account.ts with a basic getKernelClient() (ECDSA, Sepolia,
+  with paymaster gas sponsorship).
+
+  Use @zerodev/permissions or @zerodev/session-key (check what is installed).
+  Use viem. Read env vars from lib/config.ts.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/permissions"
+    - "viem"
+  calls:
+    - "toECDSASigner"
+    - "toPermissionValidator"
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Load the page. A spending-limited session key should be created automatically.
+    Click "Mint NFT" and verify it succeeds within the daily limit.
+  checklist:
+    - "Page loads with no console errors"
+    - "The session key with spending limit is created without a user prompt"
+    - "A 'Mint NFT' button is visible"
+    - "Clicking it shows a userOp hash confirming the mint went through"

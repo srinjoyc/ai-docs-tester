@@ -1,0 +1,59 @@
+id: privy-03-batch-userop
+vendor: privy
+title: Claim rewards and mint in one click using a Privy smart wallet
+difficulty: 2
+tags: [basic, batching]
+
+prompt: |
+  The starter app lets users mint an NFT via a Privy smart wallet. Your task: add
+  a "Claim & Mint" button that does two things in a single transaction so the user
+  only signs once.
+
+  Create src/lib/batchMint.ts that exports sendClaimAndMint(smartWallet):
+    - Accepts a Privy smart wallet object (from useSmartWallets())
+    - Calls smartWallet.sendTransaction() with two calls in the same batch:
+        Call 1: "claim" on REWARDS_CONTRACT (env var), calldata for claimRewards()
+                 function selector 0x4e71d92d, no value
+        Call 2: mint(address) on NFT_CONTRACT (from src/lib/privyConfig.ts),
+                 passing the wallet address, no value
+    - Returns the transaction hash
+
+  Add REWARDS_CONTRACT to src/lib/privyConfig.ts (from process.env.REWARDS_CONTRACT).
+
+  Update src/components/MintButton.tsx to add a "Claim & Mint" button that:
+    - Gets the smart wallet via useSmartWallets()
+    - Calls sendClaimAndMint() and displays the tx hash on success
+
+  Enable gas sponsorship in src/main.tsx if not already done (add the smartWallets
+  config stub — it's fine to leave the policy ID as a placeholder).
+  Use viem for ABI encoding. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "viem"
+  calls:
+    - "useSmartWallets"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 8
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in with Privy, then click "Claim & Mint". Both claim and mint should
+    happen in a single transaction — only one tx hash should appear.
+  checklist:
+    - "A 'Claim & Mint' button is visible after login"
+    - "Clicking it shows a single transaction hash (not two separate ones)"
+    - "Status confirms both operations completed in one tx"

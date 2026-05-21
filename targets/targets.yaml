@@ -1,0 +1,98 @@
+# Doc deployment targets to evaluate.
+#
+# Add a new target by appending an entry below. Mark with `enabled: false` to
+# skip without deleting (useful for in-progress sample deployments).
+#
+# - name: short ID used in CLI --targets flag
+# - vendor: which vendor's docs this represents (so we know which use cases apply)
+# - platform: which doc platform hosts this (mintlify, fern, vocs, gitbook, readme, docusaurus, custom)
+# - base_url: docs homepage
+# - llms_txt: full URL to llms-full.txt (or llms.txt if -full not available). null if not present.
+# - mcp_endpoint: MCP server URL. null if not present.
+# - markdown_suffix: e.g. ".md" if the platform serves <url>.md. null otherwise.
+# - notes: free-form for the report
+
+targets:
+
+  # ---- ZeroDev ----
+  - name: zerodev-current
+    vendor: zerodev
+    platform: custom         # docs.zerodev.app — check what they're currently on
+    base_url: https://docs.zerodev.app
+    llms_txt: https://docs.zerodev.app/llms-full.txt
+    mcp_endpoint: null       # FILL IN
+    markdown_suffix: null    # FILL IN
+    notes: "Current production docs. The baseline."
+    enabled: true
+
+  - name: zerodev-mintlify-staging
+    vendor: zerodev
+    platform: mintlify
+    base_url: https://ocl-de73b1a4.mintlify.app
+    llms_txt: https://ocl-de73b1a4.mintlify.app/llms-full.txt
+    mcp_endpoint: https://ocl-de73b1a4.mintlify.app/mcp
+    mcp_tool_slug: "zero_dev"
+    markdown_suffix: ".mdx"
+    notes: "Mintlify staging deployment of ZeroDev docs."
+    enabled: true
+
+  - name: zerodev-fern-sample
+    vendor: zerodev
+    platform: fern
+    base_url: https://YOUR-FERN-SAMPLE.docs.buildwithfern.com
+    llms_txt: https://YOUR-FERN-SAMPLE.docs.buildwithfern.com/llms-full.txt
+    mcp_endpoint: null       # check Fern's MCP support
+    markdown_suffix: ".md"
+    notes: "Fern-hosted port of ZeroDev docs. Fern serves markdown to detected LLM bots."
+    enabled: false
+
+  - name: zerodev-vocs-sample
+    vendor: zerodev
+    platform: vocs
+    base_url: https://YOUR-VOCS-SAMPLE.vercel.app
+    llms_txt: null
+    mcp_endpoint: null
+    markdown_suffix: null
+    notes: "Vocs (open source, Wevm-built, used by viem). No native AI features — useful floor."
+    enabled: false
+
+  # ---- Competitors (fixed content, just for cross-vendor signal) ----
+  - name: privy-current
+    vendor: privy
+    platform: mintlify       # Privy uses Mintlify
+    base_url: https://docs.privy.io
+    llms_txt: https://docs.privy.io/skill.md
+    mcp_endpoint: https://docs.privy.io/mcp
+    markdown_suffix: ".md"
+    notes: "Privy production docs. Mintlify-hosted."
+    enabled: true
+
+  - name: safe-current
+    vendor: safe
+    platform: custom         # docs.safe.global — check what platform
+    base_url: https://docs.safe.global
+    llms_txt: null
+    mcp_endpoint: null
+    markdown_suffix: null
+    notes: "Safe (Gnosis Safe) production docs."
+    enabled: true
+
+  - name: dynamic-current
+    vendor: dynamic
+    platform: mintlify
+    base_url: https://www.dynamic.xyz/docs
+    llms_txt: https://www.dynamic.xyz/docs/llms.txt
+    mcp_endpoint: null
+    markdown_suffix: ".md"
+    notes: "Dynamic Labs docs. Mintlify-hosted."
+    enabled: true
+
+  - name: alchemy-aa-current
+    vendor: alchemy
+    platform: custom
+    base_url: https://accountkit.alchemy.com
+    llms_txt: null
+    mcp_endpoint: null
+    markdown_suffix: null
+    notes: "Alchemy Account Kit docs."
+    enabled: true

@@ -1,0 +1,56 @@
+id: privy-10-spending-limit
+vendor: privy
+title: Cap how much ETH the app can spend per day on the user's behalf
+difficulty: 4
+tags: [spending-limit, smart-wallets]
+
+prompt: |
+  The starter app's smart wallet can spend unlimited ETH on behalf of the user.
+  Your task: add a daily spending limit so the wallet cannot spend more than
+  0.01 ETH per day, even if the session key or app is compromised.
+
+  Create src/lib/spendingLimit.ts that exports applySpendingLimit(smartWallet):
+    - Accepts the Privy smart wallet from useSmartWallets()
+    - Configures a spending limit of 0.01 ETH per 24-hour window
+    - This may require installing a Privy smart wallet policy, using a ZeroDev
+      spending-limit module via the smart wallet's underlying account, or using
+      the Privy gas policy API — check Privy's docs for "spending limits",
+      "gas policies", or "smart wallet modules"
+    - Returns a confirmation object or the updated wallet
+
+  Update src/components/MintButton.tsx to call applySpendingLimit() on first use,
+  and show the remaining daily budget ("Budget used: 0.002 / 0.01 ETH") next to
+  the mint button.
+
+  Use @privy-io/react-auth and its smart-wallets subpackage.
+  Use viem for value encoding. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "viem"
+  calls:
+    - "useSmartWallets"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in and click "Mint NFT". A daily budget indicator should appear next
+    to the mint button showing how much of the 0.01 ETH daily cap has been used.
+  checklist:
+    - "After login, the mint button shows a budget indicator ('Budget used: 0 / 0.01 ETH' or similar)"
+    - "Clicking 'Mint NFT' shows a tx hash"
+    - "The budget counter increments after the mint"

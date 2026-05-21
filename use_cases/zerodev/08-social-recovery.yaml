@@ -1,0 +1,65 @@
+id: zerodev-08-social-recovery
+vendor: zerodev
+title: Let users recover their wallet using a backup address
+difficulty: 4
+tags: [recovery]
+
+prompt: |
+  The starter app lets a user mint NFTs from their Kernel smart account. Your task:
+  add account recovery so that if the user ever loses access to their signing key,
+  a trusted backup address can restore access — like a "forgot password" flow.
+
+  Create lib/recovery.ts with two exports:
+
+  1. setupRecovery(kernelClient, guardianAddress):
+     - Takes an existing KernelAccountClient and a trusted guardian address
+       (GUARDIAN_ADDRESS env var)
+     - Installs a recovery module on the account that lets the guardian
+       initiate a key rotation if the original signer is lost
+     - Sends the setup userOp and returns its hash
+
+  2. initiateRecovery(guardianPrivateKey, accountAddress, newOwnerAddress):
+     - Called by the guardian (GUARDIAN_PRIVATE_KEY env var) to start recovery
+     - Targets the account at accountAddress
+     - Proposes replacing the current owner with NEW_OWNER_ADDRESS env var
+     - Returns the recovery userOp hash
+
+  Also implement lib/account.ts with getKernelClient() (basic ECDSA Kernel client
+  on Sepolia, with gas sponsorship via the paymaster).
+
+  Update pages/index.tsx to add a "Set Up Recovery" button that calls setupRecovery()
+  with the signed-in account and the GUARDIAN_ADDRESS.
+
+  Use @zerodev/sdk and viem. Read all addresses and keys from env vars via lib/config.ts.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: compile
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Load the page, then click "Set Up Recovery" to install the recovery module
+    and verify the guardian address is referenced in the UI.
+  checklist:
+    - "Page loads with no console errors"
+    - "A 'Set Up Recovery' button is visible"
+    - "Clicking it shows a userOp hash confirming the recovery module was installed"
+    - "The guardian address from env vars is referenced on the page"

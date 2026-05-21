@@ -1,0 +1,60 @@
+id: privy-09-chain-abstraction
+vendor: privy
+title: Let users mint on Base using funds held on Optimism
+difficulty: 4
+tags: [chain-abstraction, smart-wallets]
+
+prompt: |
+  The starter app mints on Sepolia. Your task: extend it so users can mint on
+  Base Sepolia even if their ETH is on Optimism Sepolia — Privy smart wallets
+  should handle the cross-chain gas abstraction.
+
+  1. Update src/lib/privyConfig.ts to export BASE_SEPOLIA_NFT_CONTRACT
+     (from process.env.BASE_SEPOLIA_NFT_CONTRACT) and add chain info for
+     Base Sepolia and Optimism Sepolia.
+
+  2. Update src/main.tsx PrivyProvider config to support both Base Sepolia and
+     Optimism Sepolia in the smart wallet config (supportedChains or equivalent
+     prop — check Privy's multi-chain smart wallet docs).
+
+  3. Create src/components/CrossChainMintButton.tsx that:
+     - Uses useSmartWallets() to get the smart wallet
+     - Sends a mint(address) transaction on BASE_SEPOLIA_NFT_CONTRACT on Base Sepolia
+     - The gas abstraction (sourcing gas cross-chain) should be handled by the
+       Privy smart wallet infrastructure — check whether Privy supports cross-app
+       wallets or chain-abstracted gas policies
+     - Displays the transaction hash on success
+
+  4. Add <CrossChainMintButton /> to src/App.tsx below the existing MintButton.
+
+  Use viem's baseSepolia and optimismSepolia chains. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "viem"
+  calls:
+    - "useSmartWallets"
+  forbidden:
+    - "ethers"
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in, then find the CrossChainMintButton which mints on Base Sepolia
+    using funds sourced from Optimism Sepolia via chain abstraction.
+  checklist:
+    - "Login works and both mint buttons are visible"
+    - "A cross-chain mint button (labeled for Base Sepolia) is present"
+    - "Clicking it initiates a cross-chain transaction and shows a tx hash"
+    - "The status message indicates which chain was used"

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "ocl": {
+      "source": "ocl-de73b1a4.mintlify.app",
+      "sourceType": "well-known",
+      "computedHash": "6bfc8a6a3756ee7221921469eb677b7e5355ab18bd67257c91dadcc1e9526131"
+    },
+    "privy": {
+      "source": "docs.privy.io",
+      "sourceType": "well-known",
+      "computedHash": "3e40ae32cad9f01549bb4add57053ebbcd5448f7d881f84a131f5e5bf8f6c092"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+id: privy-08-social-recovery
+vendor: privy
+title: Let users recover their wallet if they lose access to their device
+difficulty: 2
+tags: [recovery]
+
+prompt: |
+  The starter app gives each user a Privy embedded wallet. Your task: add an
+  explicit recovery setup flow so users can link a backup login method before
+  they need it.
+
+  1. Update src/components/LoginButton.tsx to show a "Set up recovery" section
+     once the user is logged in:
+     - Check if the user has a linked email via usePrivy().user.linkedAccounts
+     - If no email is linked, show a "Link email as backup" button
+     - On click, call linkEmail() from usePrivy() to link an email to the account
+     - Once linked, show "Recovery email set: <email>" with a checkmark
+
+  2. Create src/lib/recovery.ts that exports:
+     - getRecoveryStatus(user): returns { hasEmail: boolean, hasGoogle: boolean, isRecoverable: boolean }
+       based on the user's linkedAccounts array
+     - promptLinkGoogle(linkGoogle): calls the linkGoogle function from usePrivy()
+
+  3. Update src/App.tsx to render the recovery section after login, above MintButton.
+
+  Privy embedded wallets are automatically backed up by Privy. This flow is about
+  ensuring the user has a fallback auth method to regain access.
+
+  Use @privy-io/react-auth only. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+  calls:
+    - "usePrivy"
+    - "linkEmail"
+  forbidden:
+    - "ethers"
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 8
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in and check the recovery section. If no email is linked to the
+    Privy account, a "Link email as backup" button should appear.
+  checklist:
+    - "After login, a recovery status section is visible on the page"
+    - "If email is not linked, 'Link email as backup' button is shown"
+    - "Clicking the button prompts to enter or link an email address"
+    - "After linking, 'Recovery email set: <email>' with a checkmark appears"

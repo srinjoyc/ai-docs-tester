@@ -1,0 +1,54 @@
+id: zerodev-01-kernel-mint
+vendor: zerodev
+title: Implement Kernel account + mint an NFT via userOp
+difficulty: 1
+tags: [basic]
+
+prompt: |
+  Upgrade MintButton.tsx to send the NFT mint as a UserOperation through a ZeroDev
+  Kernel smart account, using the connected MetaMask wallet as the ECDSA signer.
+
+  What needs to change — only src/components/MintButton.tsx:
+  - Get the wagmi WalletClient via useWalletClient() and convert it to a signer
+  - Create a Kernel account (ECDSA validator) using BUNDLER_URL from config.ts
+  - Create a KernelAccountClient with PAYMASTER_URL for gas sponsorship
+  - Send the mint(address) call to NFT_CONTRACT as a UserOperation via sendUserOperation
+  - Display the resulting userOp hash
+
+  Files: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL, PAYMASTER_URL),
+  src/components/MintButton.tsx (only file to edit)
+  @zerodev/sdk, @zerodev/ecdsa-validator, permissionless are installed.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/ecdsa-validator"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+    - "signerToEcdsaValidator"
+  forbidden:
+    - "ethers"
+  chain: sepolia
+
+grader:
+  type: e2e
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/e2e.sh
+
+budget:
+  max_turns: 12
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Open the app and click "Mint NFT". The button should call the ZeroDev Kernel
+    smart account and display a userOp hash.
+  checklist:
+    - "Page loads with no console errors"
+    - "A 'Mint NFT' button is visible"
+    - "Clicking 'Mint NFT' shows a loading/minting state"
+    - "Status shows a userOp hash (0x...)"

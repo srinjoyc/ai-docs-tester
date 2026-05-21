@@ -1,0 +1,60 @@
+id: privy-07-multi-owner
+vendor: privy
+title: Require two team members to approve before the wallet can mint
+difficulty: 3
+tags: [multi-owner, smart-wallets]
+
+prompt: |
+  The starter app gives each user a Privy smart wallet. Your task: configure the
+  smart wallet to be a team wallet requiring 2 out of 3 owners to co-sign.
+
+  Create src/lib/teamWallet.ts that exports configureTeamWallet():
+    - Reads three owner addresses from env vars: OWNER_1, OWNER_2, OWNER_3
+      (add these to src/lib/privyConfig.ts)
+    - Configures the Privy smart wallet to use weighted ECDSA multi-owner:
+      each owner has weight 1, approval threshold is 2
+    - This may require using the underlying ZeroDev Kernel via the Privy smart
+      wallet's getEthereumProvider() or a custom signer — check Privy's smart
+      wallet docs for multi-owner / additional signers support
+    - Returns the configured wallet address
+
+  Update src/App.tsx to show the team wallet address after login.
+
+  Update src/components/MintButton.tsx: after configureTeamWallet() is called,
+  the mint button should send the mint userOp through the team wallet client.
+
+  Note: Privy smart wallets are ZeroDev Kernel accounts. If Privy's SDK doesn't
+  directly expose multi-owner config, use the approach documented in Privy's
+  "Custom signers" or "Smart wallet configuration" guides.
+
+  Use viem. Do not use ethers.
+
+expected:
+  imports:
+    - "@privy-io/react-auth"
+    - "viem"
+  calls:
+    - "useSmartWallets"
+  forbidden:
+    - "ethers"
+
+grader:
+  type: compile
+  setup: ./graders/privy-base/setup.sh
+  run: ./graders/privy-base/typecheck.sh
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:5173"
+  what_to_do: >
+    Log in and verify the smart wallet is configured as a 2-of-3 multi-owner
+    team wallet. The shared team wallet address should be displayed.
+  checklist:
+    - "Login works and the mint UI loads"
+    - "A team/shared wallet address (0x...) is shown on the page"
+    - "The UI indicates a multi-owner or 2-of-3 approval policy is configured"
+    - "The mint button attempts to use the multi-owner wallet"
