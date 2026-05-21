@@ -141,3 +141,9 @@ docs-eval/
   targets/
     targets.yaml    # all doc targets with URLs + feature flags
 ```
+
+Things that should work:
+- Gas sponorship, session keys, and batching, SRA
+- Viem compatability is only supported (don't need to worry about ethers)
+- Using privy as signer to zerodev
+
