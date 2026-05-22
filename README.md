@@ -176,12 +176,20 @@ cp .env.example .env
 docs-eval --help
 ```
 
+### Model backends
+
+The runner supports two backends selected automatically by model name:
+
+- **Claude models** (`claude-*`): invoked via the `claude -p` CLI subprocess using Claude Code's existing authentication. No `ANTHROPIC_API_KEY` needed — the Claude Code CLI handles auth. Custom tools are exposed through an MCP stdio server (`mcp_server.py`) that Claude Code starts per cell.
+- **OpenAI models** (`gpt-*`): invoked via the OpenAI Python SDK. Requires `CHAT_GPT_API_KEY`.
+
+The Claude path exists specifically because we don't hold a raw Anthropic API key; we rely on the authenticated Claude Code session instead.
+
 ### Environment Variables
 
 | Variable | Description |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude API key |
-| `CHAT_GPT_API_KEY` | OpenAI API key |
+| `CHAT_GPT_API_KEY` | OpenAI API key (only needed for GPT model runs) |
 | `PRIVY_APP_ID` | Privy App ID from [dashboard.privy.io](https://dashboard.privy.io) |
 | `ZERODEV_PROJECT_ID` | ZeroDev project ID |
 | `BUNDLER_URL` | ZeroDev bundler RPC URL |

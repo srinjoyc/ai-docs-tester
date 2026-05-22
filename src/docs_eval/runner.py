@@ -33,6 +33,9 @@ from typing import Any
 import httpx
 from openai import OpenAI
 
+def _is_claude_model(model: str) -> bool:
+    return model.startswith("claude")
+
 # AgentMail is optional — only imported when AGENTMAIL_API_KEY is set.
 try:
     from agentmail import AgentMail as _AgentMailClient
@@ -47,7 +50,7 @@ from . import llms_txt
 # Model choice: Sonnet is the realistic default for coding agents; if you want
 # to compare "what would Claude Code likely do" use the same Sonnet model it
 # uses. Override via env var so you can A/B test models too.
-DEFAULT_MODEL = os.environ.get("DOCS_EVAL_MODEL", "gpt-4o")
+DEFAULT_MODEL = os.environ.get("DOCS_EVAL_MODEL", "claude-opus-4-7")
 
 
 @dataclass
@@ -662,6 +665,349 @@ def _human_review(state: "_AgentState", use_case: "UseCase",
     return passed, notes
 
 
+# --- Provider-specific agent loops -----------------------------------------
+#
+# We have two backends:
+#
+#   _run_loop_openai  — uses the OpenAI Python SDK directly (needs CHAT_GPT_API_KEY)
+#   _run_loop_claude  — uses the `claude -p` CLI subprocess via MCP
+#
+# The Claude path exists because we don't have a direct Anthropic API key; we
+# rely on the Claude Code CLI's existing authentication instead. The MCP server
+# (mcp_server.py) runs as a stdio subprocess and exposes the same tools
+# (list_files, read_file, write_file, run_grader, fetch_url) that the OpenAI
+# path implements inline. Claude's internal tool loop handles multi-turn; we
+# parse its --output-format stream-json transcript afterward.
+
+
+def _run_loop_openai(
+    state: _AgentState,
+    use_case: "UseCase",
+    target: "Target",
+    mode: str,
+    system: str,
+    tools: list[dict[str, Any]],
+    cfg: "RunnerConfig",
+) -> tuple[int, int, int]:
+    """Run the agent loop using the OpenAI chat completions API.
+
+    Returns (turns, total_input_tokens, total_output_tokens).
+    """
+    client = OpenAI(
+        api_key=os.environ.get("CHAT_GPT_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    )
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": use_case.prompt},
+    ]
+
+    total_in = total_out = 0
+    turns = 0
+    start = time.time()
+    deadline = start + use_case.max_seconds
+
+    for turn in range(use_case.max_turns):
+        turns = turn + 1
+        elapsed_so_far = time.time() - start
+        if time.time() > deadline:
+            state.log("timeout", {"after_turn": turn, "elapsed_seconds": elapsed_so_far})
+            if cfg.verbose:
+                print(f"  [agent] TIMEOUT after turn {turn} ({elapsed_so_far:.0f}s)")
+            break
+
+        if cfg.verbose:
+            print(f"  [agent] turn {turns}/{use_case.max_turns} "
+                  f"({elapsed_so_far:.0f}s elapsed, "
+                  f"{total_in:,}in/{total_out:,}out tokens so far)")
+
+        _newer_api = any(cfg.model.startswith(p) for p in ("gpt-5", "o1", "o3", "o4"))
+        _token_kwarg = "max_completion_tokens" if _newer_api else "max_tokens"
+
+        for _retry in range(5):
+            try:
+                resp = client.chat.completions.create(
+                    model=cfg.model,
+                    **{_token_kwarg: 4096},
+                    tools=tools or None,
+                    messages=messages,
+                )
+                break
+            except Exception as _e:
+                if "rate_limit" in str(_e).lower() or "429" in str(_e):
+                    wait = 20 * (_retry + 1)
+                    if cfg.verbose:
+                        print(f"  [agent]   rate limit — waiting {wait}s")
+                    time.sleep(wait)
+                else:
+                    raise
+        else:
+            raise RuntimeError("rate limit retries exhausted")
+
+        msg = resp.choices[0].message
+        finish_reason = resp.choices[0].finish_reason
+        total_in += resp.usage.prompt_tokens
+        total_out += resp.usage.completion_tokens
+
+        assistant_entry: dict[str, Any] = {"role": "assistant", "content": msg.content}
+        if msg.tool_calls:
+            assistant_entry["tool_calls"] = [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in msg.tool_calls
+            ]
+        messages.append(assistant_entry)
+
+        state.log("assistant", {
+            "turn": turns,
+            "stop_reason": finish_reason,
+            "input_tokens": resp.usage.prompt_tokens,
+            "output_tokens": resp.usage.completion_tokens,
+            "content": msg.content,
+            "tool_calls": [
+                {"name": tc.function.name, "arguments": tc.function.arguments}
+                for tc in (msg.tool_calls or [])
+            ],
+        })
+
+        tool_calls = msg.tool_calls or []
+        if cfg.verbose and tool_calls:
+            print(f"  [agent]   tools: {[tc.function.name for tc in tool_calls]}")
+
+        if finish_reason == "stop" and not tool_calls:
+            if state.first_grader_pass is None:
+                state.log("note", "agent stopped without grading; running grader")
+                if cfg.verbose:
+                    print("  [agent]   stopped without grading — running grader now")
+                _run_grader(state)
+            break
+
+        for tc in tool_calls:
+            name = tc.function.name
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
+            result = _handle_tool(state, name, args)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": json.dumps(result),
+            })
+            state.log("tool_result", {
+                "turn": turns,
+                "tool": name,
+                "result_summary": _summarize_tool_result(name, result),
+            })
+            if cfg.verbose and name == "run_grader":
+                status = "PASS" if result.get("pass") else "FAIL"
+                print(f"  [grader]  {status}")
+                if not result.get("pass") and result.get("stderr"):
+                    for line in result["stderr"].strip().splitlines()[:5]:
+                        print(f"            {line}")
+
+        if state.last_pass:
+            if cfg.verbose:
+                print(f"  [agent]   grader passed — done in {turns} turn(s)")
+            break
+
+    return turns, total_in, total_out
+
+
+def _run_loop_claude(
+    state: _AgentState,
+    use_case: "UseCase",
+    target: "Target",
+    mode: str,
+    system: str,
+    tools: list[dict[str, Any]],
+    cfg: "RunnerConfig",
+    work_dir: Path,
+    setup_elapsed: float,
+) -> tuple[int, int, int]:
+    """Run the agent loop via the `claude -p` CLI subprocess.
+
+    We cannot call the Anthropic API directly because we don't have a raw API
+    key — instead we rely on the Claude Code CLI's existing authentication.
+    The tool loop runs inside `claude` itself; we supply custom tools via an
+    MCP server (mcp_server.py) started as a stdio subprocess.
+
+    Returns (turns, total_input_tokens, total_output_tokens).
+    """
+    import shutil
+    import tempfile
+    import sys
+
+    if shutil.which("claude") is None:
+        raise RuntimeError(
+            "claude CLI not found in PATH — install Claude Code: https://claude.ai/code"
+        )
+
+    # Resolve the grader script path so we can pass it to the MCP server.
+    grader_cfg = use_case.grader
+    run_script = Path(grader_cfg["run"])
+    if not run_script.is_absolute():
+        project_root = use_case.source_path.parents[2]
+        run_script = project_root / run_script
+    grader_env_extra = {k: str(v) for k, v in grader_cfg.get("env", {}).items()}
+
+    # Build the MCP server invocation.  We launch it as a stdio subprocess so
+    # Claude Code manages the lifecycle; each cell gets its own server instance
+    # scoped to that cell's work directory.
+    mcp_server_args = [
+        sys.executable, "-m", "docs_eval.mcp_server",
+        "--work-dir", str(work_dir),
+        "--grader-script", str(run_script),
+        "--grader-env", json.dumps(grader_env_extra),
+    ]
+    if mode == "web":
+        mcp_server_args.append("--enable-fetch")
+
+    mcp_config = {
+        "mcpServers": {
+            "docs-eval": {
+                "type": "stdio",
+                "command": mcp_server_args[0],
+                "args": mcp_server_args[1:],
+            }
+        }
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, prefix="docs_eval_mcp_"
+    ) as f:
+        json.dump(mcp_config, f)
+        mcp_config_path = f.name
+
+    # For llms-txt / skill modes, prepend the docs context to the user prompt
+    # since there's no system-prompt flag in `claude -p`.  For web mode, Claude
+    # discovers docs via fetch_url which is exposed as an MCP tool.
+    full_prompt = system + "\n\n---\n\n" + use_case.prompt
+
+    cmd = [
+        "claude", "-p", full_prompt,
+        "--mcp-config", mcp_config_path,
+        "--output-format", "stream-json",
+        "--max-turns", str(use_case.max_turns),
+        "--model", cfg.model,
+        "--allowedTools",
+        "mcp__docs-eval__list_files,mcp__docs-eval__read_file,"
+        "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
+        + (",mcp__docs-eval__fetch_url" if mode == "web" else ""),
+    ]
+
+    if cfg.verbose:
+        print(f"  [claude-cli] running: claude -p ... --model {cfg.model}")
+
+    start = time.time()
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=use_case.max_seconds + 30,  # slight buffer over agent budget
+        )
+        raw_output = proc.stdout
+    except subprocess.TimeoutExpired as e:
+        raw_output = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+        if cfg.verbose:
+            print(f"  [claude-cli] TIMEOUT after {use_case.max_seconds}s")
+    finally:
+        try:
+            os.unlink(mcp_config_path)
+        except OSError:
+            pass
+
+    # Parse the stream-json transcript to extract turn counts and token usage.
+    turns = 0
+    total_in = total_out = 0
+    tool_names_this_turn: list[str] = []
+
+    for line in raw_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        etype = event.get("type")
+
+        if etype == "assistant":
+            turns += 1
+            elapsed = time.time() - start
+            msg = event.get("message", {})
+            usage = msg.get("usage", {})
+            in_tok = usage.get("input_tokens", 0)
+            out_tok = usage.get("output_tokens", 0)
+            total_in += in_tok
+            total_out += out_tok
+
+            content = msg.get("content", [])
+            tool_uses = [b for b in content if b.get("type") == "tool_use"]
+            text_block = next((b.get("text", "") for b in content if b.get("type") == "text"), None)
+            tool_names_this_turn = [tu.get("name", "").replace("mcp__docs-eval__", "")
+                                     for tu in tool_uses]
+
+            state.log("assistant", {
+                "turn": turns,
+                "stop_reason": msg.get("stop_reason"),
+                "input_tokens": in_tok,
+                "output_tokens": out_tok,
+                "content": text_block,
+                "tool_calls": [
+                    {"name": tu.get("name", ""), "arguments": json.dumps(tu.get("input", {}))}
+                    for tu in tool_uses
+                ],
+            })
+
+            if cfg.verbose:
+                print(f"  [agent] turn {turns}/{use_case.max_turns} "
+                      f"({elapsed:.0f}s elapsed, {total_in:,}in/{total_out:,}out tokens so far)")
+                if tool_names_this_turn:
+                    print(f"  [agent]   tools: {tool_names_this_turn}")
+
+        elif etype == "user":
+            # Tool results fed back as user messages
+            content = event.get("message", {}).get("content", [])
+            for block in content:
+                if block.get("type") != "tool_result":
+                    continue
+                tool_id = block.get("tool_use_id", "")
+                result_text = block.get("content", "")
+                try:
+                    result = json.loads(result_text) if isinstance(result_text, str) else result_text
+                except (json.JSONDecodeError, TypeError):
+                    result = {"raw": str(result_text)}
+
+                # Find the tool name from the matching tool_use id in the transcript
+                tool_name = tool_id  # fallback
+                state.log("tool_result", {
+                    "turn": turns,
+                    "tool": tool_name,
+                    "result_summary": _summarize_tool_result("run_grader", result)
+                                      if "pass" in result else str(result)[:80],
+                })
+
+                if isinstance(result, dict) and "pass" in result:
+                    grader_pass = result["pass"]
+                    state.last_pass = grader_pass
+                    state.last_stdout = result.get("stdout", "")
+                    state.last_stderr = result.get("stderr", "")
+                    if state.first_grader_pass is None:
+                        state.first_grader_pass = grader_pass
+                    state.grader_calls += 1
+                    if cfg.verbose:
+                        print(f"  [grader]  {'PASS' if grader_pass else 'FAIL'}")
+                        if not grader_pass and result.get("stderr"):
+                            for line_ in result["stderr"].strip().splitlines()[:5]:
+                                print(f"            {line_}")
+
+    # Log stderr from claude CLI if any (e.g. MCP startup errors)
+    if proc.stderr if 'proc' in dir() else False:
+        state.log("claude_cli_stderr", proc.stderr[:2000])
+
+    return turns, total_in, total_out
+
+
 # --- Main run loop ---------------------------------------------------------
 
 def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
@@ -754,17 +1100,8 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
                 print(f"  [skill] no skill file at {skill_path} — running without context")
 
     # ── Step 3: run the agent loop ────────────────────────────────────────────
-    client = OpenAI(
-        api_key=os.environ.get("CHAT_GPT_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    )
     tools = _build_tools(mode, target)
     system = _system_prompt(use_case, target, mode, llms_txt_content, skill_content)
-
-    # OpenAI uses system message as first item in the messages array.
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": use_case.prompt},
-    ]
 
     # Build AgentMail client once per cell (shared across all turns).
     agentmail_client = None
@@ -790,127 +1127,28 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
     start = time.time()
     total_in = total_out = 0
     turns = 0
-    deadline = start + use_case.max_seconds
 
     if cfg.verbose:
         print(f"  [agent] starting — budget: {use_case.max_turns} turns / "
               f"{use_case.max_seconds}s")
 
     try:
-        for turn in range(use_case.max_turns):
-            turns = turn + 1
-            elapsed_so_far = time.time() - start
-            if time.time() > deadline:
-                state.log("timeout", {"after_turn": turn, "elapsed_seconds": elapsed_so_far})
-                if cfg.verbose:
-                    print(f"  [agent] TIMEOUT after turn {turn} ({elapsed_so_far:.0f}s)")
-                break
+        if _is_claude_model(cfg.model):
+            turns, total_in, total_out = _run_loop_claude(
+                state, use_case, target, mode, system, tools, cfg,
+                work_dir, setup_elapsed,
+            )
+        else:
+            turns, total_in, total_out = _run_loop_openai(
+                state, use_case, target, mode, system, tools, cfg,
+            )
 
-            if cfg.verbose:
-                print(f"  [agent] turn {turns}/{use_case.max_turns} "
-                      f"({elapsed_so_far:.0f}s elapsed, "
-                      f"{total_in:,}in/{total_out:,}out tokens so far)")
-
-            # gpt-5+ uses max_completion_tokens; older models use max_tokens
-            _newer_api = any(cfg.model.startswith(p) for p in ("gpt-5", "o1", "o3", "o4"))
-            _token_kwarg = "max_completion_tokens" if _newer_api else "max_tokens"
-
-            for _retry in range(5):
-                try:
-                    resp = client.chat.completions.create(
-                        model=cfg.model,
-                        **{_token_kwarg: 4096},
-                        tools=tools or None,
-                        messages=messages,
-                    )
-                    break
-                except Exception as _e:
-                    if "rate_limit" in str(_e).lower() or "429" in str(_e):
-                        wait = 20 * (_retry + 1)
-                        if cfg.verbose:
-                            print(f"  [agent]   rate limit — waiting {wait}s")
-                        time.sleep(wait)
-                    else:
-                        raise
-            else:
-                raise RuntimeError("rate limit retries exhausted")
-            msg = resp.choices[0].message
-            finish_reason = resp.choices[0].finish_reason
-            total_in += resp.usage.prompt_tokens
-            total_out += resp.usage.completion_tokens
-
-            # Append assistant turn (include tool_calls if present)
-            assistant_entry: dict[str, Any] = {"role": "assistant", "content": msg.content}
-            if msg.tool_calls:
-                assistant_entry["tool_calls"] = [
-                    {"id": tc.id, "type": "function",
-                     "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                    for tc in msg.tool_calls
-                ]
-            messages.append(assistant_entry)
-
-            state.log("assistant", {
-                "turn": turns,
-                "stop_reason": finish_reason,
-                "input_tokens": resp.usage.prompt_tokens,
-                "output_tokens": resp.usage.completion_tokens,
-                "content": msg.content,
-                "tool_calls": [
-                    {"name": tc.function.name, "arguments": tc.function.arguments}
-                    for tc in (msg.tool_calls or [])
-                ],
-            })
-
-            tool_calls = msg.tool_calls or []
-
-            if cfg.verbose and tool_calls:
-                print(f"  [agent]   tools: {[tc.function.name for tc in tool_calls]}")
-
-            if finish_reason == "stop" and not tool_calls:
-                if state.first_grader_pass is None:
-                    state.log("note", "agent stopped without grading; running grader")
-                    if cfg.verbose:
-                        print("  [agent]   stopped without grading — running grader now")
-                    _run_grader(state)
-                break
-
-            # Execute tools; each result is a separate "tool" role message in OpenAI
-            for tc in tool_calls:
-                name = tc.function.name
-                try:
-                    args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-                result = _handle_tool(state, name, args)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": json.dumps(result),
-                })
-                state.log("tool_result", {
-                    "turn": turns,
-                    "tool": name,
-                    "result_summary": _summarize_tool_result(name, result),
-                })
-                if cfg.verbose and name == "run_grader":
-                    status = "PASS" if result.get("pass") else "FAIL"
-                    print(f"  [grader]  {status}")
-                    if not result.get("pass") and result.get("stderr"):
-                        lines = result["stderr"].strip().splitlines()[:5]
-                        for line in lines:
-                            print(f"            {line}")
-
-            if state.last_pass:
-                if cfg.verbose:
-                    print(f"  [agent]   grader passed — done in {turns} turn(s)")
-                break
         # ── Step 4: optional human review ────────────────────────────────────
         if state.last_pass and cfg.human_review and use_case.human_check:
             hr_passed, hr_notes = _human_review(state, use_case, cfg)
             state.last_human_review = {"passed": hr_passed, "notes": hr_notes}
             state.log("human_review", state.last_human_review)
     finally:
-        # Always log final summary before closing the transcript
         state.log("summary", {
             "turns": turns,
             "passed": state.last_pass,
