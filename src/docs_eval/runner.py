@@ -893,6 +893,7 @@ def _run_loop_claude(
         "mcp__docs-eval__list_files,mcp__docs-eval__read_file,"
         "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
         + (",mcp__docs-eval__fetch_url" if mode == "web" else ""),
+        "--verbose",  # required by claude CLI when using --output-format stream-json
     ]
 
     if cfg.verbose:
@@ -915,10 +916,20 @@ def _run_loop_claude(
         except OSError:
             pass
 
-    # Parse the stream-json transcript to extract turn counts and token usage.
+    # Parse the stream-json transcript.
+    #
+    # Observed format from `claude --output-format stream-json --verbose`:
+    #   {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_xxx",
+    #     "name":"mcp__docs-eval__run_grader","input":{}}],"usage":{"input_tokens":N,...}}}
+    #   {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_xxx",
+    #     "content":[{"type":"text","text":"{\"pass\":false,...}"}]}]}}
+    #   {"type":"result","num_turns":N,"usage":{"input_tokens":N,"output_tokens":N,...}}
+    #
+    # Key gotcha: tool_result "content" is a list of text blocks, not a plain string.
     turns = 0
     total_in = total_out = 0
-    tool_names_this_turn: list[str] = []
+    # Map tool_use_id -> short tool name so we can label tool results correctly.
+    tool_id_to_name: dict[str, str] = {}
 
     for line in raw_output.splitlines():
         line = line.strip()
@@ -932,63 +943,83 @@ def _run_loop_claude(
         etype = event.get("type")
 
         if etype == "assistant":
-            turns += 1
             elapsed = time.time() - start
             msg = event.get("message", {})
             usage = msg.get("usage", {})
-            in_tok = usage.get("input_tokens", 0)
+            # input_tokens is just the new tokens; cache tokens are tracked separately.
+            in_tok = (usage.get("input_tokens", 0)
+                      + usage.get("cache_creation_input_tokens", 0)
+                      + usage.get("cache_read_input_tokens", 0))
             out_tok = usage.get("output_tokens", 0)
             total_in += in_tok
             total_out += out_tok
 
             content = msg.get("content", [])
             tool_uses = [b for b in content if b.get("type") == "tool_use"]
-            text_block = next((b.get("text", "") for b in content if b.get("type") == "text"), None)
-            tool_names_this_turn = [tu.get("name", "").replace("mcp__docs-eval__", "")
-                                     for tu in tool_uses]
+            text_block = next((b.get("text") for b in content if b.get("type") == "text"), None)
 
-            state.log("assistant", {
-                "turn": turns,
-                "stop_reason": msg.get("stop_reason"),
-                "input_tokens": in_tok,
-                "output_tokens": out_tok,
-                "content": text_block,
-                "tool_calls": [
-                    {"name": tu.get("name", ""), "arguments": json.dumps(tu.get("input", {}))}
-                    for tu in tool_uses
-                ],
-            })
+            # Build the id→name map for this turn's tool calls.
+            short_names = []
+            for tu in tool_uses:
+                tid = tu.get("id", "")
+                short = tu.get("name", "").replace("mcp__docs-eval__", "")
+                tool_id_to_name[tid] = short
+                short_names.append(short)
 
-            if cfg.verbose:
-                print(f"  [agent] turn {turns}/{use_case.max_turns} "
-                      f"({elapsed:.0f}s elapsed, {total_in:,}in/{total_out:,}out tokens so far)")
-                if tool_names_this_turn:
-                    print(f"  [agent]   tools: {tool_names_this_turn}")
+            # Skip pure-internal Claude Code turns (ToolSearch, no real output).
+            if tool_uses or text_block:
+                turns += 1
+                state.log("assistant", {
+                    "turn": turns,
+                    "stop_reason": msg.get("stop_reason"),
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "content": text_block,
+                    "tool_calls": [
+                        {"name": tu.get("name", ""),
+                         "arguments": json.dumps(tu.get("input", {}))}
+                        for tu in tool_uses
+                    ],
+                })
+                if cfg.verbose:
+                    print(f"  [agent] turn {turns}/{use_case.max_turns} "
+                          f"({elapsed:.0f}s elapsed, "
+                          f"{total_in:,}in/{total_out:,}out tokens so far)")
+                    if short_names:
+                        print(f"  [agent]   tools: {short_names}")
 
         elif etype == "user":
-            # Tool results fed back as user messages
+            # Tool results fed back as user messages.
             content = event.get("message", {}).get("content", [])
             for block in content:
                 if block.get("type") != "tool_result":
                     continue
                 tool_id = block.get("tool_use_id", "")
-                result_text = block.get("content", "")
-                try:
-                    result = json.loads(result_text) if isinstance(result_text, str) else result_text
-                except (json.JSONDecodeError, TypeError):
-                    result = {"raw": str(result_text)}
+                tool_name = tool_id_to_name.get(tool_id, tool_id)
 
-                # Find the tool name from the matching tool_use id in the transcript
-                tool_name = tool_id  # fallback
+                # content is a list of text blocks: [{"type":"text","text":"..."}]
+                raw_content = block.get("content", "")
+                if isinstance(raw_content, list):
+                    result_text = next(
+                        (b.get("text", "") for b in raw_content if b.get("type") == "text"), ""
+                    )
+                else:
+                    result_text = str(raw_content)
+
+                try:
+                    result: Any = json.loads(result_text)
+                except (json.JSONDecodeError, TypeError):
+                    result = {"raw": result_text[:200]}
+
                 state.log("tool_result", {
                     "turn": turns,
                     "tool": tool_name,
-                    "result_summary": _summarize_tool_result("run_grader", result)
-                                      if "pass" in result else str(result)[:80],
+                    "result_summary": _summarize_tool_result(tool_name, result)
+                                      if isinstance(result, dict) else result_text[:80],
                 })
 
                 if isinstance(result, dict) and "pass" in result:
-                    grader_pass = result["pass"]
+                    grader_pass = bool(result["pass"])
                     state.last_pass = grader_pass
                     state.last_stdout = result.get("stdout", "")
                     state.last_stderr = result.get("stderr", "")
@@ -998,11 +1029,24 @@ def _run_loop_claude(
                     if cfg.verbose:
                         print(f"  [grader]  {'PASS' if grader_pass else 'FAIL'}")
                         if not grader_pass and result.get("stderr"):
-                            for line_ in result["stderr"].strip().splitlines()[:5]:
-                                print(f"            {line_}")
+                            for ln in result["stderr"].strip().splitlines()[:5]:
+                                print(f"            {ln}")
 
-    # Log stderr from claude CLI if any (e.g. MCP startup errors)
-    if proc.stderr if 'proc' in dir() else False:
+        elif etype == "result":
+            # Final summary event — use num_turns as authoritative turn count
+            # and pull aggregate token usage if available.
+            num_turns = event.get("num_turns")
+            if num_turns is not None:
+                turns = num_turns
+            agg = event.get("usage", {})
+            if agg.get("input_tokens") or agg.get("output_tokens"):
+                total_in = (agg.get("input_tokens", 0)
+                            + agg.get("cache_creation_input_tokens", 0)
+                            + agg.get("cache_read_input_tokens", 0))
+                total_out = agg.get("output_tokens", 0)
+
+    # Log claude CLI stderr if any (MCP startup errors, auth issues, etc.)
+    if 'proc' in dir() and proc.stderr:
         state.log("claude_cli_stderr", proc.stderr[:2000])
 
     return turns, total_in, total_out
