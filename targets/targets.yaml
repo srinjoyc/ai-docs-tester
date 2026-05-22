@@ -36,6 +36,16 @@ targets:
     notes: "Mintlify staging deployment of ZeroDev docs."
     enabled: true
 
+  - name: zerodev-fumadocs
+    vendor: zerodev
+    platform: fumadocs
+    base_url: https://zd-fumadocs.onrender.com
+    llms_txt: https://zd-fumadocs.onrender.com/llms-full.txt
+    mcp_endpoint: null
+    markdown_suffix: null
+    notes: "Fumadocs deployment of ZeroDev docs."
+    enabled: true
+
   - name: zerodev-fern-sample
     vendor: zerodev
     platform: fern

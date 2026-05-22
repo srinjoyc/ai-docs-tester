@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+from dotenv import load_dotenv
+load_dotenv()
 from rich.console import Console
 from rich.progress import (BarColumn, Progress, SpinnerColumn,
                             TaskProgressColumn, TextColumn, TimeElapsedColumn)
