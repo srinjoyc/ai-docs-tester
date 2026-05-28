@@ -75,6 +75,20 @@ class RunResult:
     # Human review fields — only populated when --human-review is set
     human_review_passed: bool | None = None
     human_review_notes: str = ""
+    # Observability counters
+    file_reads: int = 0
+    file_writes: int = 0
+    grader_calls: int = 0
+    turns_to_first_grader: int | None = None
+    turns_to_success: int | None = None
+    # Discovery & capability tracking (populated for all modes)
+    discovered_capabilities: dict | None = None
+    disclosed_to_agent: bool = False   # True for auto-informed only
+    # Resource inventory — all doc URLs the agent accessed
+    doc_resources: list = field(default_factory=list)
+    # Agent self-report (auto modes only) and mismatch analysis
+    agent_self_report: dict | None = None
+    self_report_mismatches: list = field(default_factory=list)
 
 
 @dataclass
@@ -140,7 +154,7 @@ def _build_tools(mode: str, target: Target) -> list[dict[str, Any]]:
                       "required": ["message_id"]}),
         ]
 
-    if mode == "web":
+    if mode in ("web", "auto-informed", "auto-blind"):
         tools.append(_fn_tool(
             "fetch_url",
             "Fetch the text content of any URL (documentation page, API reference, etc.). "
@@ -150,7 +164,7 @@ def _build_tools(mode: str, target: Target) -> list[dict[str, Any]]:
              "required": ["url"]},
         ))
 
-    if mode == "mcp" and target.mcp_endpoint:
+    if mode in ("mcp", "auto-informed") and target.mcp_endpoint:
         tools += [
             _fn_tool("search_docs",
                      f"Search the {target.vendor} documentation. Returns relevant excerpts "
@@ -174,29 +188,60 @@ def _build_tools(mode: str, target: Target) -> list[dict[str, Any]]:
 
 # --- System prompt construction --------------------------------------------
 
+_SELF_REPORT_INSTRUCTION = """
+--- SELF-REPORT (fill out when done, whether you succeeded or not) ---
+After your final action, output a JSON block exactly like this (no other text around it):
+```json
+{
+  "used_llms_txt": false,
+  "used_llms_full_txt": false,
+  "used_mcp": false,
+  "used_skill_md": false,
+  "used_regular_docs": false,
+  "used_prior_knowledge": false,
+  "most_useful_resource": null,
+  "missing_information": [],
+  "difficult_information": [],
+  "resource_urls": []
+}
+```
+Set booleans based on what you actually used. List every doc URL you fetched in resource_urls.
+--- END SELF-REPORT INSTRUCTION ---"""
+
+
 def _system_prompt(use_case: UseCase, target: Target, mode: str,
                    llms_txt_content: str | None,
-                   skill_content: str | None = None) -> str:
+                   skill_content: str | None = None,
+                   capabilities: Any | None = None) -> str:
+    _has_fetch = mode in ("web", "auto-informed", "auto-blind")
+    _has_mcp = mode in ("mcp", "auto-informed") and target.mcp_endpoint
+    tool_list = (
+        "list_files, read_file, write_file, run_grader"
+        + (", fetch_url" if _has_fetch else "")
+        + (", search_docs, query_docs_filesystem" if _has_mcp else "")
+    )
+
     parts = [
-        "You are a careful coding agent extending an existing starter app to integrate "
+        "You are a coding agent extending an existing starter app to integrate "
         f"a {target.vendor} SDK feature. The starter app is already scaffolded in the "
         "work directory.",
         "",
-        "Process:",
-        "1. Call `list_files` to see the existing project structure.",
-        "2. Call `read_file` on relevant files to understand the starter code.",
-        "3. Read what you need from the docs (using your retrieval tools where applicable).",
-        "4. Call `write_file` to add new files or overwrite existing ones. "
-           "Match the project's existing directory structure.",
-        "5. Call `run_grader` to typecheck the whole project. Fix any errors and repeat.",
-        "6. When the grader passes, respond with a one-line summary of what you added.",
+        f"Your tools: {tool_list}. Use ONLY these — do not use Bash or any other tool.",
+        "",
+        "Process (stay within budget — do not over-explore):",
+        "1. Call list_files once to see the project structure.",
+        "2. Call read_file on the 1-2 files most relevant to the task.",
+        "3. Use any provided docs context (or fetch/search if available) for the API.",
+        "4. Call write_file to implement the solution.",
+        "5. Call run_grader to typecheck and test. Fix errors, call it again.",
+        "6. When grader passes, reply with one sentence summarising what you added.",
         "",
         "Rules:",
-        "- Use ONLY the documentation you're given (via tools or in context). Do not invent APIs.",
-        "- If you're unsure, prefer querying docs over guessing.",
-        "- Write production-quality TypeScript: typed, no `any`, working imports.",
-        "- Read env vars via `process.env.X`. Don't hardcode secrets.",
-        "- Preserve all existing starter code unless the task explicitly says to change it.",
+        "- Use the docs you're given. Do not invent APIs or guess package names.",
+        "- Write TypeScript with proper types — no `any`, no missing imports.",
+        "- Read config/env from existing files; don't hardcode secrets.",
+        "- Preserve existing starter code unless the task says to change it.",
+        "- Move fast: read the minimum, write the code, run the grader.",
     ]
 
     if mode == "llms-txt" and llms_txt_content:
@@ -227,6 +272,22 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             skill_content,
             f"--- END {target.vendor.upper()} SKILL REFERENCE ---",
         ]
+    elif mode == "auto-informed" and capabilities is not None:
+        parts += [
+            "",
+            capabilities.agent_summary(),
+            "",
+            f"You have fetch_url available (and MCP search tools if listed above). "
+            f"Use whichever resources you find most useful. "
+            "Fetch at most 3 doc resources, then write and test your code.",
+        ]
+    elif mode == "auto-blind":
+        parts += [
+            "",
+            f"You have fetch_url available. The docs base URL is: {target.base_url}",
+            "Explore the site as needed to find documentation. "
+            "Fetch at most 3 doc resources, then write and test your code.",
+        ]
 
     if os.environ.get("AGENTMAIL_API_KEY"):
         parts += [
@@ -234,6 +295,10 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             "Email tools: you have create_inbox / list_messages / get_message available.",
             "Use create_inbox to get a real @agentmail.to address for any signup or OTP flow.",
         ]
+
+    # Self-report requested for auto modes (observability benchmark)
+    if mode in ("auto-informed", "auto-blind"):
+        parts.append(_SELF_REPORT_INSTRUCTION)
 
     return "\n".join(parts)
 
@@ -256,13 +321,36 @@ class _AgentState:
         self.last_pass: bool = False
         self.last_human_review: dict[str, Any] | None = None
         # AgentMail: one client shared across all tool calls in this run.
-        # inbox_id is set after the first create_inbox call.
         self.agentmail_client: Any | None = agentmail_client
         self.agentmail_inbox_id: str | None = None
+        # Observability counters
+        self.file_reads: int = 0
+        self.file_writes: int = 0
+        self.turns_to_first_grader: int | None = None   # turn# of first run_grader call
+        self.turns_to_success: int | None = None         # turn# when grader first passed
+        # Resource inventory: url -> {url, resource_type, access_method, times_accessed}
+        self.doc_resource_inventory: dict[str, dict[str, Any]] = {}
+        # Raw text of the last assistant message (for self-report extraction)
+        self.last_assistant_text: str = ""
 
     def log(self, kind: str, data: Any) -> None:
         self.transcript_fp.write(json.dumps({"kind": kind, "data": data}) + "\n")
         self.transcript_fp.flush()
+
+    def track_resource(self, url: str, resource_type: str, access_method: str) -> None:
+        """Record a documentation resource access."""
+        if url not in self.doc_resource_inventory:
+            self.doc_resource_inventory[url] = {
+                "url": url,
+                "resource_type": resource_type,
+                "access_method": access_method,
+                "times_accessed": 0,
+            }
+        self.doc_resource_inventory[url]["times_accessed"] += 1
+        self.log("resource_access", {
+            "url": url, "resource_type": resource_type,
+            "access_method": access_method,
+        })
 
 
 def _run_grader(state: _AgentState) -> dict[str, Any]:
@@ -330,7 +418,8 @@ def _run_grader(state: _AgentState) -> dict[str, Any]:
     if state.first_grader_pass is None:
         state.first_grader_pass = passed
 
-    state.log("grader", {"pass": passed, "stdout": stdout[-4000:], "stderr": stderr[-4000:]})
+    state.log("grader", {"pass": passed, "stdout": stdout[-4000:], "stderr": stderr[-4000:],
+                          "call_number": state.grader_calls})
     return {
         "pass": passed,
         # Truncate so we don't fill the agent's context with a 50-line tsc dump
@@ -346,6 +435,7 @@ def _write_file(state: _AgentState, path: str, content: str) -> dict[str, Any]:
         return {"error": "path escapes work directory"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
+    state.file_writes += 1
     state.log("write_file", {"path": path, "bytes": len(content)})
     return {"ok": True, "path": path, "bytes": len(content)}
 
@@ -410,9 +500,26 @@ def _get_message(state: _AgentState, message_id: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+def _classify_url(url: str) -> str:
+    """Classify a fetched URL into a resource type for the inventory."""
+    low = url.lower()
+    if "llms-full.txt" in low:
+        return "llms-full.txt"
+    if "llms.txt" in low:
+        return "llms.txt"
+    if "skill.md" in low:
+        return "skill.md"
+    if low.endswith(".mdx"):
+        return "mdx-page"
+    if low.endswith(".md"):
+        return "markdown-page"
+    return "docs-page"
+
+
 def _fetch_url(state: _AgentState, url: str) -> dict[str, Any]:
     """Fetch a URL and return plain text (strips HTML tags)."""
     state.log("fetch_url", {"url": url})
+    state.track_resource(url, _classify_url(url), "fetch_url")
     try:
         r = httpx.get(url, timeout=15, follow_redirects=True,
                       headers={"User-Agent": "docs-eval/0.1"})
@@ -472,6 +579,8 @@ def _mcp_tool_names(target: Target) -> tuple[str, str]:
 def _read_docs_mcp(state: _AgentState, query: str) -> dict[str, Any]:
     """Search the MCP server for relevant doc chunks."""
     state.log("search_docs", {"query": query})
+    if state.target.mcp_endpoint:
+        state.track_resource(state.target.mcp_endpoint, "mcp", "search_docs")
     endpoint = state.target.mcp_endpoint
     if not endpoint:
         return {"error": "no MCP endpoint configured for this target"}
@@ -486,6 +595,8 @@ def _read_docs_mcp(state: _AgentState, query: str) -> dict[str, Any]:
 def _query_docs_filesystem_mcp(state: _AgentState, command: str) -> dict[str, Any]:
     """Run a shell command against the MCP virtual docs filesystem."""
     state.log("query_docs_filesystem", {"command": command})
+    if state.target.mcp_endpoint:
+        state.track_resource(state.target.mcp_endpoint, "mcp", "query_docs_filesystem")
     endpoint = state.target.mcp_endpoint
     if not endpoint:
         return {"error": "no MCP endpoint configured for this target"}
@@ -519,6 +630,7 @@ def _read_file(state: _AgentState, path: str) -> dict[str, Any]:
     if not target.exists():
         return {"error": f"file not found: {path}"}
     content = target.read_text()
+    state.file_reads += 1
     state.log("read_file", {"path": path, "bytes": len(content)})
     return {"path": path, "content": content}
 
@@ -665,6 +777,74 @@ def _human_review(state: "_AgentState", use_case: "UseCase",
     return passed, notes
 
 
+# --- Self-report extraction and mismatch detection -------------------------
+
+def _extract_self_report(text: str) -> dict[str, Any] | None:
+    """Parse a JSON self-report block from assistant text output."""
+    import re
+    # Try ```json ... ``` first (structured block)
+    for block in reversed(re.findall(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)):
+        try:
+            d = json.loads(block)
+            if "used_llms_txt" in d or "resource_urls" in d:
+                return d
+        except (json.JSONDecodeError, ValueError):
+            pass
+    # Fallback: any JSON object with a self-report key
+    for block in reversed(re.findall(r'\{[^{}]{20,}\}', text, re.DOTALL)):
+        try:
+            d = json.loads(block)
+            if "used_llms_txt" in d or "resource_urls" in d:
+                return d
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
+def _detect_mismatches(
+    state: _AgentState, report: dict[str, Any]
+) -> list[str]:
+    """Compare agent self-report against observed tool logs. Return discrepancies."""
+    mismatches: list[str] = []
+    observed = state.doc_resource_inventory
+
+    def _any_url_matches(keyword: str) -> bool:
+        return any(keyword in u.lower() for u in observed)
+
+    def _any_method(method: str) -> bool:
+        return any(r["access_method"] == method for r in observed.values())
+
+    checks = [
+        ("used_llms_full_txt", lambda: _any_url_matches("llms-full"),
+         "llms-full.txt fetch"),
+        ("used_llms_txt", lambda: _any_url_matches("llms.txt"),
+         "llms.txt fetch"),
+        ("used_skill_md", lambda: _any_url_matches("skill.md"),
+         "skill.md fetch"),
+        ("used_mcp",
+         lambda: _any_method("search_docs") or _any_method("query_docs_filesystem"),
+         "MCP tool call"),
+    ]
+    for key, observed_fn, label in checks:
+        claimed = bool(report.get(key))
+        saw = observed_fn()
+        if claimed and not saw:
+            mismatches.append(f"claimed {key}=true but no {label} observed")
+        elif not claimed and saw:
+            mismatches.append(f"claimed {key}=false but {label} was observed")
+
+    reported_urls = set(report.get("resource_urls") or [])
+    observed_urls = set(observed.keys())
+    extra = reported_urls - observed_urls
+    missed = observed_urls - reported_urls
+    if extra:
+        mismatches.append(f"reported URLs not observed in tool logs: {sorted(extra)}")
+    if missed:
+        mismatches.append(f"observed URLs not in agent's resource_urls: {sorted(missed)}")
+
+    return mismatches
+
+
 # --- Provider-specific agent loops -----------------------------------------
 #
 # We have two backends:
@@ -770,6 +950,8 @@ def _run_loop_openai(
         })
 
         tool_calls = msg.tool_calls or []
+        if msg.content:
+            state.last_assistant_text = msg.content
         if cfg.verbose and tool_calls:
             print(f"  [agent]   tools: {[tc.function.name for tc in tool_calls]}")
 
@@ -798,6 +980,11 @@ def _run_loop_openai(
                 "tool": name,
                 "result_summary": _summarize_tool_result(name, result),
             })
+            if name == "run_grader":
+                if state.turns_to_first_grader is None:
+                    state.turns_to_first_grader = turns
+                if result.get("pass") and state.turns_to_success is None:
+                    state.turns_to_success = turns
             if cfg.verbose and name == "run_grader":
                 status = "PASS" if result.get("pass") else "FAIL"
                 print(f"  [grader]  {status}")
@@ -859,7 +1046,7 @@ def _run_loop_claude(
         "--grader-script", str(run_script),
         "--grader-env", json.dumps(grader_env_extra),
     ]
-    if mode == "web":
+    if mode in ("web", "auto-informed", "auto-blind"):
         mcp_server_args.append("--enable-fetch")
 
     mcp_config = {
@@ -883,16 +1070,18 @@ def _run_loop_claude(
     # discovers docs via fetch_url which is exposed as an MCP tool.
     full_prompt = system + "\n\n---\n\n" + use_case.prompt
 
+    allowed_mcp = (
+        "mcp__docs-eval__list_files,mcp__docs-eval__read_file,"
+        "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
+        + (",mcp__docs-eval__fetch_url" if mode in ("web", "auto-informed", "auto-blind") else "")
+    )
     cmd = [
         "claude", "-p", full_prompt,
         "--mcp-config", mcp_config_path,
         "--output-format", "stream-json",
         "--max-turns", str(use_case.max_turns),
         "--model", cfg.model,
-        "--allowedTools",
-        "mcp__docs-eval__list_files,mcp__docs-eval__read_file,"
-        "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
-        + (",mcp__docs-eval__fetch_url" if mode == "web" else ""),
+        "--allowedTools", allowed_mcp,
         "--verbose",  # required by claude CLI when using --output-format stream-json
     ]
 
@@ -965,10 +1154,31 @@ def _run_loop_claude(
                 short = tu.get("name", "").replace("mcp__docs-eval__", "")
                 tool_id_to_name[tid] = short
                 short_names.append(short)
+                # Track observability counters from tool call inputs (Claude path).
+                # Tools execute inside the MCP subprocess so we can't intercept them
+                # via _handle_tool — we infer them from the stream-json events instead.
+                if short == "fetch_url":
+                    url_arg = tu.get("input", {}).get("url", "")
+                    if url_arg:
+                        state.track_resource(url_arg, _classify_url(url_arg), "fetch_url")
+                elif short == "read_file":
+                    state.file_reads += 1
+                elif short == "write_file":
+                    state.file_writes += 1
+                elif short in ("search_docs", "query_docs_filesystem"):
+                    if state.target.mcp_endpoint:
+                        state.track_resource(
+                            state.target.mcp_endpoint, "mcp", short
+                        )
 
-            # Skip pure-internal Claude Code turns (ToolSearch, no real output).
-            if tool_uses or text_block:
+            # Skip internal-only turns (ToolSearch / deferred-tool loader) —
+            # they don't represent real agent work and shouldn't burn the budget.
+            _internal = {"ToolSearch", "WebSearch", "WebFetch"}
+            real_tools = [n for n in short_names if n not in _internal]
+            if real_tools or text_block:
                 turns += 1
+                if text_block:
+                    state.last_assistant_text = text_block
                 state.log("assistant", {
                     "turn": turns,
                     "stop_reason": msg.get("stop_reason"),
@@ -1025,6 +1235,9 @@ def _run_loop_claude(
                     state.last_stderr = result.get("stderr", "")
                     if state.first_grader_pass is None:
                         state.first_grader_pass = grader_pass
+                        state.turns_to_first_grader = turns
+                    if grader_pass and state.turns_to_success is None:
+                        state.turns_to_success = turns
                     state.grader_calls += 1
                     if cfg.verbose:
                         print(f"  [grader]  {'PASS' if grader_pass else 'FAIL'}")
@@ -1143,9 +1356,32 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
             if cfg.verbose:
                 print(f"  [skill] no skill file at {skill_path} — running without context")
 
+    # ── Step 2c: discovery phase ─────────────────────────────────────────────
+    from .discovery import get_capabilities as _get_caps
+    if cfg.verbose:
+        print(f"  [discovery] probing {target.base_url} …")
+    try:
+        discovered_caps = _get_caps(
+            target.base_url, target.mcp_endpoint, target.markdown_suffix, target.name
+        )
+        if cfg.verbose:
+            flags = []
+            if discovered_caps.has_llms_full_txt: flags.append("llms-full.txt")
+            if discovered_caps.has_llms_txt: flags.append("llms.txt")
+            if discovered_caps.has_skill_md: flags.append("skill.md")
+            if discovered_caps.has_mcp: flags.append("mcp")
+            print(f"  [discovery] found: {flags or ['(none)']}")
+    except Exception as _e:
+        discovered_caps = None
+        if cfg.verbose:
+            print(f"  [discovery] failed: {_e}")
+
     # ── Step 3: run the agent loop ────────────────────────────────────────────
     tools = _build_tools(mode, target)
-    system = _system_prompt(use_case, target, mode, llms_txt_content, skill_content)
+    system = _system_prompt(
+        use_case, target, mode, llms_txt_content, skill_content,
+        capabilities=discovered_caps if mode == "auto-informed" else None,
+    )
 
     # Build AgentMail client once per cell (shared across all turns).
     agentmail_client = None
@@ -1155,6 +1391,7 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
     transcript_fp = transcript_path.open("w")
     state = _AgentState(work_dir, use_case, target, transcript_fp,
                         agentmail_client=agentmail_client)
+    disclosed_to_agent = mode == "auto-informed"
     state.log("meta", {
         "use_case": use_case.id,
         "target": target.name,
@@ -1165,6 +1402,8 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
         "setup_seconds": round(setup_elapsed, 2),
         "work_dir": str(work_dir),
         "transcript": str(transcript_path),
+        "discovered_capabilities": discovered_caps.to_dict() if discovered_caps else None,
+        "disclosed_to_agent": disclosed_to_agent,
     })
     state.log("user", use_case.prompt)
 
@@ -1193,6 +1432,17 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
             state.last_human_review = {"passed": hr_passed, "notes": hr_notes}
             state.log("human_review", state.last_human_review)
     finally:
+        # Extract self-report from agent's last text message (auto modes only).
+        self_report: dict[str, Any] | None = None
+        mismatches: list[str] = []
+        if mode in ("auto-informed", "auto-blind") and state.last_assistant_text:
+            self_report = _extract_self_report(state.last_assistant_text)
+            if self_report:
+                mismatches = _detect_mismatches(state, self_report)
+                state.log("self_report", {"report": self_report, "mismatches": mismatches})
+
+        doc_resources = list(state.doc_resource_inventory.values())
+
         state.log("summary", {
             "turns": turns,
             "passed": state.last_pass,
@@ -1201,6 +1451,11 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
             "total_input_tokens": total_in,
             "total_output_tokens": total_out,
             "wall_seconds": round(time.time() - start, 2),
+            "file_reads": state.file_reads,
+            "file_writes": state.file_writes,
+            "turns_to_first_grader": state.turns_to_first_grader,
+            "turns_to_success": state.turns_to_success,
+            "doc_resources": doc_resources,
         })
         transcript_fp.close()
 
@@ -1238,6 +1493,16 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
         total_output_tokens=total_out,
         human_review_passed=hr_passed,
         human_review_notes=hr_notes,
+        file_reads=state.file_reads,
+        file_writes=state.file_writes,
+        grader_calls=state.grader_calls,
+        turns_to_first_grader=state.turns_to_first_grader,
+        turns_to_success=state.turns_to_success,
+        discovered_capabilities=discovered_caps.to_dict() if discovered_caps else None,
+        disclosed_to_agent=disclosed_to_agent,
+        doc_resources=doc_resources,
+        agent_self_report=self_report,
+        self_report_mismatches=mismatches,
     )
 
 
@@ -1283,6 +1548,11 @@ def _categorize_failure(state: _AgentState, use_case: UseCase) -> str:
         used_forbidden = [f for f in forbidden if f in code]
         if used_forbidden:
             return "used_forbidden_api"
-    if combined:
+    # Distinguish tsc failures from Playwright/runtime failures
+    tsc_patterns = ("error TS", "Type error", "Cannot find name", "Property", "Argument of type")
+    e2e_patterns = ("expect(", "toBeVisible", "Timeout", "Playwright", "Test failed", "1 failed")
+    if any(p in combined for p in e2e_patterns):
+        return "e2e_failure"
+    if any(p in combined for p in tsc_patterns) or combined:
         return "typecheck_error"
     return "exhausted_turns"

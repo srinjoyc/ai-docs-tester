@@ -1,0 +1,59 @@
+id: zerodev-05-contract-allowlist
+vendor: zerodev
+title: Session key locked to a single contract (call policy allowlist)
+difficulty: 4
+tags: [session-keys, permissions, call-policy]
+
+prompt: |
+  I want a session key that can only interact with one specific contract — our NFT
+  contract — and gets blocked if it tries to call anything else. This prevents a
+  compromised session key from touching other contracts.
+
+  Set up the page with a session key that has permission only for NFT_CONTRACT.
+  Add two buttons to demonstrate the restriction:
+  - "Mint NFT" — calls mint() on NFT_CONTRACT (allowed, should succeed and show hash)
+  - "Call Other Contract" — calls a dummy contract address that is not NFT_CONTRACT
+    (should be rejected by the policy and show an error on the page)
+
+  Both outcomes should be visible on the page without a page reload.
+
+  Files available: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL,
+  PAYMASTER_URL), src/components/MintButton.tsx.
+  Packages installed: @zerodev/sdk, @zerodev/ecdsa-validator, @zerodev/permissions,
+  permissionless, viem.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/permissions"
+    - "viem"
+  calls:
+    - "toECDSASigner"
+    - "toPermissionValidator"
+    - "toCallPolicy"
+  forbidden:
+    - "ethers"
+  chain: arbitrumSepolia
+
+grader:
+  type: e2e
+  setup: ./graders/zerodev-base/setup.sh
+  run: ./graders/zerodev-base/e2e.sh
+  env:
+    GRADER_SCENARIO: "contract-allowlist"
+
+budget:
+  max_turns: 12
+  max_seconds: 360
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:3000"
+  what_to_do: >
+    Click "Mint NFT" — should succeed and show a hash. Then click
+    "Call Other Contract" — should show a rejection error.
+  checklist:
+    - "Page loads with no console errors"
+    - "Both buttons visible after connecting"
+    - "'Mint NFT' shows a transaction hash"
+    - "'Call Other Contract' shows an error indicating the contract is not allowed"

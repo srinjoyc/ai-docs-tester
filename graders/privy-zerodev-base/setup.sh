@@ -56,9 +56,11 @@ export const NFT_CONTRACT = (
 ) as `0x${string}`;
 
 export const BUNDLER_URL =
-  `https://rpc.zerodev.app/api/v2/bundler/${ZERODEV_PROJECT_ID}`;
+  process.env.BUNDLER_URL ??
+  `https://staging-rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
 export const PAYMASTER_URL =
-  `https://rpc.zerodev.app/api/v2/paymaster/${ZERODEV_PROJECT_ID}`;
+  process.env.PAYMASTER_URL ??
+  `https://staging-rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
 CONFIGTS
 
 # -- src/lib/kernelAccount.ts -------------------------------------------------

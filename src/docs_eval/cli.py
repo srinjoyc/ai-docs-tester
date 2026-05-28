@@ -20,7 +20,7 @@ from rich.progress import (BarColumn, Progress, SpinnerColumn,
                             TaskProgressColumn, TextColumn, TimeElapsedColumn)
 from rich.table import Table
 
-from .config import MODES, load_targets, load_use_cases
+from .config import CLASSIC_MODES, MODES, load_targets, load_use_cases
 from .reporter import (load_summary_json, render_markdown, render_rich_summary,
                         write_summary_json)
 from .runner import RunnerConfig, run_cell
@@ -43,7 +43,7 @@ def main():
               help="Comma-separated target names. Defaults to all enabled.")
 @click.option("--targets-file", default="targets/targets.yaml", show_default=True,
               type=click.Path(dir_okay=False, exists=True))
-@click.option("--modes", default=",".join(MODES), show_default=True,
+@click.option("--modes", default=",".join(CLASSIC_MODES), show_default=True,
               help="Comma-separated subset of: " + ",".join(MODES))
 @click.option("--runs", type=int, default=3, show_default=True,
               help="Runs per cell. LLMs are stochastic; >1 gives variance.")

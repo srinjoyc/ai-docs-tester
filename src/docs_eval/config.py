@@ -55,8 +55,16 @@ class Target:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-# Modes the runner can execute. Each test cell is one (use_case, target, mode).
-MODES = ("web", "llms-txt", "mcp", "skill")
+# Classic modes (--modes default):
+CLASSIC_MODES = ("web", "llms-txt", "mcp", "skill")
+
+# Auto modes run a discovery phase before execution:
+#   auto-informed — discoveries disclosed to agent
+#   auto-blind    — discoveries withheld; agent must find resources on its own
+AUTO_MODES = ("auto-informed", "auto-blind")
+
+# All valid modes the runner accepts.
+MODES = CLASSIC_MODES + AUTO_MODES
 
 
 def load_use_case(path: Path) -> UseCase:

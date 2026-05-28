@@ -2,29 +2,27 @@ import { defineConfig } from "@playwright/test";
 
 const port = process.env.PLAYWRIGHT_PORT || "3000";
 const baseURL = `http://localhost:${port}`;
+const realMode = Boolean(
+  process.env.TEST_WALLET_PRIVATE_KEY && process.env.ZERODEV_PROJECT_ID
+);
 
 export default defineConfig({
   testDir: process.env.GRADER_DIR || __dirname,
   testMatch: "e2e.test.ts",
-  // One test, no parallelism needed
   workers: 1,
-  // Give the full test up to 45s (dev server start + wallet connect + tx)
-  timeout: 45_000,
+  // Real-mode includes on-chain polling (up to ~90s); mock mode is fast
+  timeout: realMode ? 180_000 : 60_000,
   use: {
     baseURL,
     headless: true,
-    // Don't record videos/traces by default — keeps grader output lean
     video: "off",
     trace: "off",
   },
   webServer: {
-    command: `npm run dev -- --port ${port}`,
+    // e2e.sh starts Next.js manually and waits for it — we just reuse it here.
+    command: `echo "server already started by e2e.sh"`,
     url: baseURL,
-    // Work dir is passed via env var so the config is reusable
-    cwd: process.env.WORK_DIR || process.cwd(),
-    reuseExistingServer: false,
-    timeout: 30_000,
-    stdout: "ignore",
-    stderr: "ignore",
+    reuseExistingServer: true,
+    timeout: 5_000,
   },
 });
