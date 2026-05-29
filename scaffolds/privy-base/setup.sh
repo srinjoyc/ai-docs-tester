@@ -46,7 +46,7 @@ export const SPONSORSHIP_POLICY_ID = process.env.SPONSORSHIP_POLICY_ID ?? "";
 EOF
 
 # -- install dependencies (cached) --------------------------------------------
-CACHE_DIR="/tmp/docs-eval-cache/privy-base-v4"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/docs-eval/privy-base-v4"
 if [ ! -d "$CACHE_DIR/node_modules" ]; then
   mkdir -p "$CACHE_DIR"
   (cd "$CACHE_DIR" && npm install --silent --no-audit --no-fund --legacy-peer-deps \

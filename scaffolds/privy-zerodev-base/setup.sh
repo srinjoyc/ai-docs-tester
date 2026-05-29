@@ -204,7 +204,7 @@ cat > index.html <<'INDEXHTML'
 INDEXHTML
 
 # -- install dependencies (cached) --------------------------------------------
-CACHE_DIR="/tmp/docs-eval-cache/privy-zerodev-base"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/docs-eval/privy-zerodev-base-v1"
 if [ ! -d "$CACHE_DIR/node_modules" ]; then
   mkdir -p "$CACHE_DIR"
   (cd "$CACHE_DIR" && npm install --silent --no-audit --no-fund \
