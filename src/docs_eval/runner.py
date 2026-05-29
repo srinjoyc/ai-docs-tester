@@ -282,6 +282,7 @@ def _agent_prompt(
         "- Treat the target docs location as authoritative for this run.",
         "- Write TypeScript with proper types — no `any`, no missing imports.",
         "- Read config/env from existing files; don't hardcode secrets.",
+        "- If the task needs vendor project, dashboard, admin, paymaster, sponsorship, or policy configuration that is not present, ask for the exact missing values and explain why you need them. Do not invent IDs, admin tokens, paymaster policies, or sponsorship credentials.",
         "- Preserve existing starter code unless the task says to change it.",
         "- Do not edit benchmark runner files, graders, use_cases, or files outside this app.",
     ]

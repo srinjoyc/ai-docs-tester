@@ -4,7 +4,9 @@
 # Starting point for all ZeroDev use cases:
 #   - Working RainbowKit + wagmi EOA mint app (shared base)
 #   - @zerodev/sdk, @zerodev/ecdsa-validator, permissionless, etc. installed
-#   - src/lib/config.ts includes ZERODEV_PROJECT_ID, BUNDLER_URL, PAYMASTER_URL
+#   - src/lib/config.ts includes ZeroDev config keys, but no working project or
+#     paymaster values by default. Agents should ask for the missing ZeroDev
+#     configuration instead of inventing it.
 #
 # Use cases upgrade MintButton to use a ZeroDev Kernel smart account on top of
 # the connected EOA, sending the mint as a UserOperation.
@@ -64,19 +66,13 @@ export const wagmiConfig = createConfig({
   connectors: [injected()],
 });
 
+// Intentionally empty by default. A real sponsored ZeroDev flow needs project
+// and paymaster/bundler configuration from the developer's ZeroDev dashboard.
+// Agents should ask for these values if the task needs live sponsorship.
 export const ZERODEV_PROJECT_ID = process.env.ZERODEV_PROJECT_ID ?? "";
-
-// Override full URLs via env vars for flexibility across chains/environments
-export const BUNDLER_URL =
-  process.env.BUNDLER_URL ??
-  `https://staging-rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
-export const PAYMASTER_URL =
-  process.env.PAYMASTER_URL ??
-  `https://staging-rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
-
-export const SMART_ROUTING_SERVER_URL =
-  process.env.SMART_ROUTING_SERVER_URL ??
-  `https://staging-rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
+export const BUNDLER_URL = process.env.BUNDLER_URL ?? "";
+export const PAYMASTER_URL = process.env.PAYMASTER_URL ?? "";
+export const SMART_ROUTING_SERVER_URL = process.env.SMART_ROUTING_SERVER_URL ?? "";
 EOF
 
 # -- install dependencies (cached) --------------------------------------------

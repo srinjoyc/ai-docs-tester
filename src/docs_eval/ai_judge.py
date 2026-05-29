@@ -353,11 +353,13 @@ ZeroDev perspective:
 - Adjacent products such as Pimlico, Alchemy, Safe, Rhinestone, Privy, Dynamic, Magic, Web3Auth, MetaMask, and WalletConnect are context for what an expert would know and for comparing docs ergonomics, but they are not substitutes for ZeroDev unless the task explicitly asks for them.
 - Separate implementation quality from docs helpfulness. If the agent solved the task mostly from installed types or prior knowledge, say that the implementation may be good while the docs-helpfulness evidence is weak.
 - Do not require a production deployment plan, paymaster dashboard policy, or exhaustive chain UX unless the prompt requested it. Capture those as caveats.
+- If the scaffold lacks ZeroDev project, bundler, paymaster, policy, or admin credentials, reward agents that explicitly identify the missing ZeroDev-specific configuration and ask for it. Penalize agents that invent project IDs, hardcode fake credentials, or pretend live sponsorship can work without required dashboard/paymaster setup.
 - Assess whether ZeroDev docs helped a first-time user understand the necessary workflow: wallet/signer source, Kernel account creation, validator selection, EntryPoint/kernel versions, bundler URL, paymaster sponsorship, sending/waiting for UserOperations or smart-account transactions, and interpreting hashes/receipts.
 - Call out docs gaps as product feedback: missing discoverable path, unclear versioning, hard-to-find package names, ambiguous signer/wallet integration, unclear paymaster policy setup, or insufficient production caveats.
 
 Use these best-practice anchors for Web3/account-abstraction apps:
 - Never expose or request private keys, mnemonics, bundler secrets, paymaster secrets, or project admin credentials in client-side code.
+- It is acceptable for an agent to ask the user for missing public project IDs, bundler/paymaster URLs, or admin credentials needed for one-time setup. The agent should distinguish public runtime config from secret/admin config and should not place secret/admin values in frontend code.
 - Prefer clear wallet connection, explicit user action, visible pending/success/error states, and transaction or UserOperation hashes linked or shown after success.
 - Verify the app uses the intended chain, account abstraction entry point/kernel version where relevant, and ZeroDev account/paymaster APIs coherently.
 - Gas sponsorship should use a ZeroDev paymaster/sponsor flow, not simply a normal EOA transaction or a misleading UI label.
