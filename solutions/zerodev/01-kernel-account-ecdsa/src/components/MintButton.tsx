@@ -19,9 +19,10 @@ import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
 import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants";
 import { NFT_CONTRACT, NFT_ABI } from "../lib/config";
 
-const ZERODEV_PROJECT_ID = process.env.NEXT_PUBLIC_ZERODEV_PROJECT_ID ?? process.env.ZERODEV_PROJECT_ID ?? "";
-const BUNDLER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
-const PAYMASTER_URL = `https://rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
+const ZERODEV_PROJECT_ID = process.env.ZERODEV_PROJECT_ID ?? "";
+const _rpc = `https://rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
+const BUNDLER_URL = process.env.BUNDLER_URL || _rpc;
+const PAYMASTER_URL = process.env.PAYMASTER_URL || _rpc;
 
 export function MintButton() {
   const { address } = useAccount();
