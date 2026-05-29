@@ -1525,7 +1525,8 @@ def _run_loop_codex(
             "Codex-specific validation contract: the benchmark runner will run the grader after you exit. "
             "Do not start dev servers, run Playwright, run the benchmark grader, or run npm build. "
             "If you need a quick check, run only TypeScript typecheck once. "
-            "Codex may also use its native file and shell tools when needed, but keep all edits inside the scaffold directory."
+            "Codex may also use its native file and shell tools when needed, including network requests to the provided docs URLs, "
+            "but keep all edits inside the scaffold directory."
         ),
     )
     start = time.time()
@@ -1544,6 +1545,7 @@ def _run_loop_codex(
         codex_timeout = min(use_case.max_seconds, 180)
 
     max_mock_user_rounds = int(os.environ.get("DOCS_EVAL_MOCK_USER_ROUNDS", "1"))
+    codex_sandbox = os.environ.get("DOCS_EVAL_CODEX_SANDBOX", "danger-full-access")
     mock_replies: list[str] = []
     rounds_run = 0
 
@@ -1573,7 +1575,7 @@ def _run_loop_codex(
         cmd += [
             "exec",
             "--cd", str(work_dir.resolve()),
-            "--sandbox", "workspace-write",
+            "--sandbox", codex_sandbox,
             "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",
