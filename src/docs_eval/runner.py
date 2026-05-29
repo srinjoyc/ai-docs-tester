@@ -1083,9 +1083,11 @@ def _run_loop_claude(
         "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
         + (",mcp__docs-eval__fetch_url" if mode in ("web", "auto-informed", "auto-blind") else "")
     )
-    # Block native claude-code file tools so the agent can't bypass the MCP sandbox
-    # by reading project memory, CLAUDE.md, or arbitrary filesystem paths.
-    _native_blocked = "Read,Write,Edit,MultiEdit,Bash,Glob,Grep,LS,TodoRead,TodoWrite,NotebookRead,NotebookEdit"
+    # Block native claude-code tools so the agent is isolated to the MCP sandbox.
+    # Critically: block Skill so the agent can't use session skills (e.g. the
+    # built-in zerodev skill) — we want to measure what the docs alone provide,
+    # not what the LLM already knows via pre-loaded skill references.
+    _native_blocked = "Read,Write,Edit,MultiEdit,Bash,Glob,Grep,LS,TodoRead,TodoWrite,NotebookRead,NotebookEdit,Skill"
     cmd = [
         "claude", "-p", full_prompt,
         "--mcp-config", mcp_config_path,
