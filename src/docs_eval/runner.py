@@ -1094,6 +1094,7 @@ def _run_loop_claude(
         "--output-format", "stream-json",
         "--max-turns", str(use_case.max_turns + 3),  # +3 absorbs ToolSearch internal overhead
         "--model", cfg.model,
+        "--bare",  # skip auto-memory, CLAUDE.md, hooks, plugins — fresh context every run
         "--allowedTools", allowed_mcp,
         "--disallowedTools", _native_blocked,
         "--verbose",  # required by claude CLI when using --output-format stream-json
