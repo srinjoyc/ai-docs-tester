@@ -40,6 +40,9 @@ if [ -f "$PROJECT_ROOT/.env.test" ]; then
 fi
 
 # ── Step 2: typecheck ─────────────────────────────────────────────────────────
+# Clean scaffolds intentionally start without ZeroDev packages. If the agent
+# added dependencies to package.json, install them before typechecking/grading.
+npm install --silent --no-audit --no-fund --legacy-peer-deps 2>&1
 ./node_modules/.bin/tsc --noEmit 2>&1 || exit 1
 
 # ── Step 2b: verify ZeroDev project accessibility (fall back to mock if blocked) ─

@@ -28,7 +28,7 @@ expected:
   chain: arbitrumSepolia
 
 scaffold:
-  setup: ./scaffolds/zerodev-base/setup.sh
+  setup: ./scaffolds/zerodev-clean-base/setup.sh
 
 grader:
   type: e2e
