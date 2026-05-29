@@ -6,44 +6,41 @@ import {
   http,
   type Account,
   type Chain,
-  type Hex,
   type Transport,
   type WalletClient,
 } from "viem";
 import { arbitrumSepolia } from "viem/chains";
-import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
 import {
   createKernelAccount,
   createKernelAccountClient,
   createZeroDevPaymasterClient,
 } from "@zerodev/sdk";
+import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
 import { KERNEL_V3_1, getEntryPoint } from "@zerodev/sdk/constants";
-import {
-  BUNDLER_URL,
-  NFT_ABI,
-  NFT_CONTRACT,
-  PAYMASTER_URL,
-} from "../lib/config";
+import { NFT_CONTRACT, NFT_ABI } from "../lib/config";
 
-const entryPoint = getEntryPoint("0.7");
-const kernelVersion = KERNEL_V3_1;
+const ZERODEV_PROJECT_ID = process.env.ZERODEV_PROJECT_ID ?? "";
+const _rpc = `https://rpc.zerodev.app/api/v3/${ZERODEV_PROJECT_ID}/chain/421614`;
+const BUNDLER_URL = process.env.BUNDLER_URL || _rpc;
+const PAYMASTER_URL = process.env.PAYMASTER_URL || _rpc;
 
 export function MintButton() {
   const { address } = useAccount();
   const { data: walletClient } = useWalletClient();
   const [isPending, setIsPending] = useState(false);
-  const [hash, setHash] = useState<Hex | null>(null);
+  const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleMint = async () => {
     if (!address || !walletClient?.account) return;
-    // WalletClient from wagmi types account as Account | undefined; narrow it
-    // so it satisfies ZeroDev's Signer = WalletClient<Transport, Chain|undefined, Account>
     const signer = walletClient as WalletClient<Transport, Chain | undefined, Account>;
+
     setIsPending(true);
     setError(null);
-    setHash(null);
+    setTxHash(null);
+
     try {
+      const entryPoint = getEntryPoint("0.7");
       const publicClient = createPublicClient({
         chain: arbitrumSepolia,
         transport: http(),
@@ -52,13 +49,13 @@ export function MintButton() {
       const ecdsaValidator = await signerToEcdsaValidator(publicClient, {
         signer,
         entryPoint,
-        kernelVersion,
+        kernelVersion: KERNEL_V3_1,
       });
 
       const account = await createKernelAccount(publicClient, {
         plugins: { sudo: ecdsaValidator },
         entryPoint,
-        kernelVersion,
+        kernelVersion: KERNEL_V3_1,
       });
 
       const paymasterClient = createZeroDevPaymasterClient({
@@ -73,23 +70,18 @@ export function MintButton() {
         paymaster: paymasterClient,
       });
 
-      const callData = await account.encodeCalls([
-        {
-          to: NFT_CONTRACT,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: NFT_ABI,
-            functionName: "mint",
-            args: [account.address],
-          }),
-        },
-      ]);
-
-      const userOpHash = await kernelClient.sendUserOperation({ callData });
-      const receipt = await kernelClient.waitForUserOperationReceipt({
-        hash: userOpHash,
+      const userOpHash = await kernelClient.sendUserOperation({
+        callData: await account.encodeCalls([
+          {
+            to: NFT_CONTRACT,
+            value: 0n,
+            data: encodeFunctionData({ abi: NFT_ABI, functionName: "mint", args: [account.address] }),
+          },
+        ]),
       });
-      setHash(receipt.receipt.transactionHash);
+
+      const receipt = await kernelClient.waitForUserOperationReceipt({ hash: userOpHash });
+      setTxHash(receipt.receipt.transactionHash);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -102,7 +94,7 @@ export function MintButton() {
       <button onClick={handleMint} disabled={isPending || !walletClient}>
         {isPending ? "Minting…" : "Mint NFT"}
       </button>
-      {hash && <p>Minted! tx: {hash}</p>}
+      {txHash && <p>Minted! tx: {txHash}</p>}
       {error && <p>Error: {error}</p>}
     </div>
   );
