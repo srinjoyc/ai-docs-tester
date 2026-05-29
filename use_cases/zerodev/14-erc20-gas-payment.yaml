@@ -1,0 +1,63 @@
+id: zerodev-07-erc20-gas
+vendor: zerodev
+title: Let users pay gas in ETH or USDC
+difficulty: 3
+tags: [basic, gas-sponsorship, erc20]
+
+# Requires ZeroDev project to have ERC-20 gas policy enabled in the dashboard.
+
+prompt: |
+  I want users to choose how they pay gas — either ETH or USDC. Some users prefer
+  not to hold ETH and would rather pay in stablecoins.
+
+  Add two mint buttons to the page:
+  - "Mint (pay gas in ETH)" — mints the NFT with ETH as the gas token
+  - "Mint (pay gas in USDC)" — mints the NFT with USDC as the gas token
+
+  Each button should display the transaction hash on success, or an error message
+  if the payment fails (e.g. USDC not configured). Both outcomes should be visible
+  on the page and printed to the console.
+
+  Files available: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL,
+  PAYMASTER_URL), src/components/MintButton.tsx.
+  Packages installed: @zerodev/sdk, @zerodev/ecdsa-validator, permissionless, viem.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/ecdsa-validator"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+    - "createZeroDevPaymasterClient"
+  forbidden:
+    - "ethers"
+  chain: arbitrumSepolia
+
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
+
+grader:
+  type: e2e
+  run: ./graders/zerodev-base/e2e.sh
+  env:
+    GRADER_SCENARIO: "erc20-gas"
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:3000"
+  what_to_do: >
+    Click "Mint (pay gas in ETH)" — should show a tx hash. Then click
+    "Mint (pay gas in USDC)" — should show a hash or a clear error if USDC
+    gas is not configured on the project.
+  checklist:
+    - "Page loads with no console errors"
+    - "Both mint buttons are visible after connecting"
+    - "ETH gas button shows a transaction hash"
+    - "USDC gas button shows a hash or a descriptive error message"
+    - "Both results are also printed to the browser console"

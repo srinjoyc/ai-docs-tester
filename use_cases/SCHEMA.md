@@ -25,15 +25,18 @@ expected:
     - "ethers"            # e.g. if we want viem-based code
   chain: "sepolia"        # which chain the code targets
 
-# How the grader runs the code.
+# How the starter project is created before the agent runs.
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh  # installs deps, prepares env
+
+# How the grader validates the agent's output after the agent runs.
 grader:
   type: compile | runtime | onchain
   # compile: tsc/typecheck only. Cheap. Catches API hallucinations.
   # runtime: actually run in sandbox, hit testnet. Slow but real.
   # onchain: assert onchain effect (userOp landed, gas sponsored, etc).
-  
-  setup: ./graders/zerodev-base/setup.sh   # installs deps, prepares env
-  run: ./graders/zerodev-base/run.sh        # executes the agent's code
+
+  run: ./graders/zerodev-base/run.sh        # executes validation
   assertions: ./graders/zerodev-01-kernel.ts # checks expected outcome
 
 # Budget for the agent

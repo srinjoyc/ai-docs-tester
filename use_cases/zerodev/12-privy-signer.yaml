@@ -1,37 +1,27 @@
-id: zerodev-12-privy-signer
+id: zerodev-08-privy-signer
 vendor: zerodev
 title: Use a Privy embedded wallet as the signer for a ZeroDev smart account
 difficulty: 3
 tags: [basic, integration:privy]
 
-# Integration use case: tests ZeroDev docs on how to use Privy as the signer.
-# Same scenario as privy-12-zerodev-kernel but run against ZeroDev targets.
-# Compare pass rates to see which docs better explain the integration.
+# Integration use case: tests ZeroDev docs on using Privy as the smart account signer.
+# Compare pass rates against privy-side docs to identify which explains it better.
 
 prompt: |
-  The starter app has Privy login and a MintButton stub. Your task: implement the
-  smart account bridge — when the user logs in with Privy, their embedded wallet
-  becomes the signer for a ZeroDev Kernel smart account.
+  Users should be able to log in with email or social (via Privy) and mint an NFT
+  through a smart account — no MetaMask required, and no gas fees.
 
-  Implement lib/kernelAccount.ts — export getKernelClientFromPrivy(walletClient):
-    - Accepts a viem WalletClient built from the Privy embedded wallet's EIP-1193 provider
-    - Converts it to a smart account signer using walletClientToSmartAccountSigner
-      from permissionless
-    - Creates a ZeroDev Kernel account on Sepolia using that signer and
-      signerToEcdsaValidator from @zerodev/ecdsa-validator
-    - Attaches the ZeroDev paymaster (PAYMASTER_URL from lib/config.ts)
-      using createZeroDevPaymasterClient
-    - Returns a KernelAccountClient ready to send sponsored userOps
+  After the user logs in:
+  - Show both their Privy wallet address and their ZeroDev smart account address
+  - "Mint NFT" should use the Privy embedded wallet as the signer for a ZeroDev
+    Kernel smart account, send the mint as a sponsored UserOperation, and display
+    the userOp hash
 
-  Implement components/MintButton.tsx:
-    - Use useWallets() from @privy-io/react-auth to find the embedded wallet
-    - Build a viem WalletClient from wallet.getEthereumProvider()
-    - Call getKernelClientFromPrivy() to get the Kernel client
-    - Send a mint(address) userOp to NFT_CONTRACT (lib/config.ts) on Sepolia
-    - Display "Minted! userOp: <hash>"
-
-  Use @privy-io/react-auth, @zerodev/sdk, @zerodev/ecdsa-validator, permissionless,
-  and viem. Read all config from lib/config.ts (which also exports PRIVY_APP_ID).
+  Files available: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL,
+  PAYMASTER_URL, PRIVY_APP_ID), src/components/MintButton.tsx,
+  src/lib/kernelAccount.ts (create this file).
+  Packages installed: @privy-io/react-auth, @zerodev/sdk, @zerodev/ecdsa-validator,
+  permissionless, viem.
 
 expected:
   imports:
@@ -48,11 +38,13 @@ expected:
     - "createZeroDevPaymasterClient"
   forbidden:
     - "ethers"
-  chain: sepolia
+  chain: arbitrumSepolia
+
+scaffold:
+  setup: ./scaffolds/privy-zerodev-base/setup.sh
 
 grader:
   type: compile
-  setup: ./graders/privy-zerodev-base/setup.sh
   run: ./graders/privy-zerodev-base/typecheck.sh
 
 budget:
@@ -61,12 +53,12 @@ budget:
 
 human_check:
   start_command: "npm run dev"
-  url: "http://localhost:5173"
+  url: "http://localhost:3000"
   what_to_do: >
-    Log in with Privy, then click "Mint NFT". The app should use the Privy
-    embedded wallet as the signer for a ZeroDev Kernel account.
+    Log in with Privy, then click "Mint NFT". Both the Privy EOA address and
+    the smart account address should be shown, followed by a userOp hash.
   checklist:
-    - "Privy login modal appears and completes successfully"
-    - "After login, 'Wallet connected — ready to mint.' or similar appears"
-    - "Clicking 'Mint NFT' shows 'Minted! userOp: 0x...' in the status"
-    - "Status message includes 'userOp' (ZeroDev account, not a regular EOA tx)"
+    - "Privy login modal appears and completes"
+    - "Privy wallet address and smart account address both displayed after login"
+    - "Clicking 'Mint NFT' shows a userOp hash (0x...)"
+    - "No MetaMask or browser wallet prompt appears"

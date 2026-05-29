@@ -1,23 +1,22 @@
 id: zerodev-01-kernel-mint
 vendor: zerodev
-title: Implement Kernel account + mint an NFT via userOp
+title: Mint an NFT gas-free using a ZeroDev smart account
 difficulty: 1
-tags: [basic]
+tags: [basic, gas-sponsorship]
 
 prompt: |
-  Upgrade MintButton.tsx to send the NFT mint as a UserOperation through a ZeroDev
-  Kernel smart account, using the connected MetaMask wallet as the ECDSA signer.
+  I want users to be able to mint an NFT without paying any gas fees. I heard
+  ZeroDev can handle this with a smart account — can you set that up?
 
-  What needs to change — only src/components/MintButton.tsx:
-  - Get the wagmi WalletClient via useWalletClient() and convert it to a signer
-  - Create a Kernel account (ECDSA validator) using BUNDLER_URL from config.ts
-  - Create a KernelAccountClient with PAYMASTER_URL for gas sponsorship
-  - Send the mint(address) call to NFT_CONTRACT as a UserOperation via sendUserOperation
-  - Display the resulting userOp hash
+  The app already has a "Mint NFT" button wired to a basic EOA transaction.
+  Upgrade it so the mint goes through a ZeroDev Kernel smart account with gas
+  sponsorship, so the user pays nothing.
 
-  Files: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL, PAYMASTER_URL),
-  src/components/MintButton.tsx (only file to edit)
-  @zerodev/sdk, @zerodev/ecdsa-validator, permissionless are installed.
+  After minting, display the transaction hash on the page.
+
+  Files available: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL,
+  PAYMASTER_URL), src/components/MintButton.tsx.
+  Packages installed: @zerodev/sdk, @zerodev/ecdsa-validator, permissionless, viem.
 
 expected:
   imports:
@@ -27,28 +26,31 @@ expected:
   calls:
     - "createKernelAccount"
     - "createKernelAccountClient"
+    - "createZeroDevPaymasterClient"
     - "signerToEcdsaValidator"
   forbidden:
     - "ethers"
-  chain: sepolia
+  chain: arbitrumSepolia
+
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
 
 grader:
   type: e2e
-  setup: ./graders/zerodev-base/setup.sh
   run: ./graders/zerodev-base/e2e.sh
 
 budget:
-  max_turns: 12
+  max_turns: 10
   max_seconds: 300
 
 human_check:
   start_command: "npm run dev"
-  url: "http://localhost:5173"
+  url: "http://localhost:3000"
   what_to_do: >
-    Open the app and click "Mint NFT". The button should call the ZeroDev Kernel
-    smart account and display a userOp hash.
+    Click "Mint NFT". Should complete without the user paying gas and show a
+    transaction hash.
   checklist:
     - "Page loads with no console errors"
-    - "A 'Mint NFT' button is visible"
-    - "Clicking 'Mint NFT' shows a loading/minting state"
-    - "Status shows a userOp hash (0x...)"
+    - "'Mint NFT' button is visible after connecting wallet"
+    - "Clicking it shows a transaction hash (0x...)"
+    - "No gas fee prompt appears"

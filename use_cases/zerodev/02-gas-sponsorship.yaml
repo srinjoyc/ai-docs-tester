@@ -1,21 +1,21 @@
-id: zerodev-02-sponsored-mint
+id: zerodev-02-batch-mint
 vendor: zerodev
-title: Add ZeroDev paymaster so the mint userOp is gas-free for the user
+title: Batch two NFT mints into a single gas-free transaction
 difficulty: 2
-tags: [basic, gas-sponsorship]
+tags: [basic, batching]
 
 prompt: |
-  Wire up a ZeroDev paymaster so the NFT mint UserOperation is gas-free for the user.
+  I want users to mint two NFTs with a single click — one on-chain transaction,
+  no double confirmations, and no gas fees.
 
-  What needs to change:
-  - src/components/MintButton.tsx: attach a ZeroDev paymaster client to the
-    KernelAccountClient using createZeroDevPaymasterClient and PAYMASTER_URL from
-    config.ts, so sendUserOperation sponsors gas automatically. Display the userOp
-    hash with "(gas sponsored)" in the status message.
+  Add a "Batch Mint" button to the app that:
+  - Sends both mint() calls to NFT_CONTRACT atomically in one UserOperation
+  - Sponsors gas via the ZeroDev paymaster so the user pays nothing
+  - Displays the transaction hash when done
 
-  Files: src/lib/config.ts (BUNDLER_URL, PAYMASTER_URL, NFT_CONTRACT, NFT_ABI),
-  src/components/MintButton.tsx
-  @zerodev/sdk, @zerodev/ecdsa-validator, permissionless are installed. Use viem, not ethers.
+  Files available: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL,
+  PAYMASTER_URL), src/components/MintButton.tsx.
+  Packages installed: @zerodev/sdk, @zerodev/ecdsa-validator, permissionless, viem.
 
 expected:
   imports:
@@ -25,17 +25,19 @@ expected:
   calls:
     - "createKernelAccount"
     - "createKernelAccountClient"
-    - "createZeroDevPaymasterClient"
+    - "sendTransaction"
   forbidden:
     - "ethers"
-  chain: sepolia
+  chain: arbitrumSepolia
+
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
 
 grader:
   type: e2e
-  setup: ./graders/zerodev-base/setup.sh
   run: ./graders/zerodev-base/e2e.sh
   env:
-    REQUIRE_GAS_SPONSORED: "true"
+    ACTION_BUTTON_TEXT: "Batch Mint"
 
 budget:
   max_turns: 8
@@ -43,11 +45,12 @@ budget:
 
 human_check:
   start_command: "npm run dev"
-  url: "http://localhost:5173"
+  url: "http://localhost:3000"
   what_to_do: >
-    Click "Mint NFT". The status message should include "(gas sponsored)"
-    and display a userOp hash.
+    Click "Batch Mint". Should send both mints in one transaction and display the
+    hash. No second confirmation prompt should appear.
   checklist:
     - "Page loads with no console errors"
-    - "A 'Mint NFT' button is visible"
-    - "Clicking shows a userOp hash AND the text '(gas sponsored)'"
+    - "'Batch Mint' button is visible"
+    - "Clicking shows a single transaction hash"
+    - "No second approval prompt appears"

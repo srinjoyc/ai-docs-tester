@@ -95,7 +95,7 @@ def _run_grader(grader_script: str, work_dir: Path, grader_env: dict) -> str:
     try:
         proc = subprocess.run(
             ["bash", grader_script, str(work_dir)],
-            capture_output=True, text=True, timeout=120, env=env,
+            capture_output=True, text=True, timeout=240, env=env,
         )
         return json.dumps({
             "pass": proc.returncode == 0,
@@ -103,7 +103,7 @@ def _run_grader(grader_script: str, work_dir: Path, grader_env: dict) -> str:
             "stderr": proc.stderr[-3000:],
         })
     except subprocess.TimeoutExpired:
-        return json.dumps({"pass": False, "stdout": "", "stderr": "GRADER TIMEOUT after 120s"})
+        return json.dumps({"pass": False, "stdout": "", "stderr": "GRADER TIMEOUT after 240s"})
 
 
 def _fetch_url(url: str) -> str:

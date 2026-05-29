@@ -28,9 +28,9 @@ targets:
   - name: zerodev-mintlify-staging
     vendor: zerodev
     platform: mintlify
-    base_url: https://ocl-de73b1a4.mintlify.app
-    llms_txt: https://ocl-de73b1a4.mintlify.app/llms-full.txt
-    mcp_endpoint: https://ocl-de73b1a4.mintlify.app/mcp
+    base_url: https://zerodev-preview.mintlify.app
+    llms_txt: https://zerodev-preview.mintlify.app/llms-full.txt
+    mcp_endpoint: https://zerodev-preview.mintlify.app/mcp
     mcp_tool_slug: "zero_dev"
     markdown_suffix: ".mdx"
     notes: "Mintlify staging deployment of ZeroDev docs."

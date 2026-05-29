@@ -1,33 +1,28 @@
 id: zerodev-06-session-key-mint
 vendor: zerodev
-title: Add a session key that can mint on behalf of the user (scoped, 24h TTL)
+title: Add a session key that can mint on behalf of the user (scoped permission, 24h TTL)
 difficulty: 4
 tags: [session-keys, permissions]
 
 prompt: |
-  The starter app is a Next.js-style TypeScript app where a user mints an NFT
-  via a ZeroDev Kernel smart account.
+  The app has a "Mint NFT" button connected to a ZeroDev Kernel smart account.
+  Update it so that minting happens via a temporary session key instead of the main
+  signer — useful for dApps that want to automate actions without asking the user
+  to approve each one.
 
-  Your task: add a session-key flow so a backend service can mint on the user's
-  behalf without the user signing each transaction.
+  What needs to change — only src/components/MintButton.tsx:
+  - On mount (useEffect), create a session key flow:
+      1. Build the main Kernel account from the connected wallet (ECDSA, BUNDLER_URL)
+      2. Generate an ephemeral session key (generatePrivateKey from viem/accounts)
+      3. Grant it permission to call ONLY NFT_CONTRACT using toCallPolicy and
+         toPermissionValidator from @zerodev/permissions
+      4. Set validity to 24 hours from now
+      5. Store the resulting sessionKeyClient in React state
+  - When "Mint NFT" is clicked, send the mint userOp through sessionKeyClient
+  - Display the userOp hash in the status area
 
-  Create a new file lib/sessionKey.ts that exports createMintSessionKey():
-    - Creates a Kernel account on Sepolia from PRIVATE_KEY (lib/config.ts)
-    - Generates a fresh random session key (private key)
-    - Grants that session key permission to call ONLY NFT_CONTRACT (lib/config.ts),
-      restricted to a single function selector (the mint function: 0x6a627842)
-    - Sets the session key to expire 24 hours from now
-    - Returns { sessionKeyAddress, sessionKeyClient } where sessionKeyClient is a
-      KernelAccountClient that uses the session key to send userOps
-
-  Also implement lib/account.ts with a basic getKernelClient() (no gas sponsorship
-  needed for this task — just a working ECDSA Kernel client on Sepolia).
-
-  Update components/MintButton.tsx to call createMintSessionKey() once on mount,
-  then use the returned sessionKeyClient to send the mint userOp.
-
-  Use @zerodev/permissions or @zerodev/session-key (check which is installed).
-  Use viem. Read env vars from lib/config.ts.
+  @zerodev/sdk, @zerodev/ecdsa-validator, @zerodev/permissions are installed.
+  Use viem, not ethers. Target Arbitrum Sepolia.
 
 expected:
   imports:
@@ -37,14 +32,17 @@ expected:
   calls:
     - "toECDSASigner"
     - "toPermissionValidator"
+    - "toCallPolicy"
   forbidden:
     - "ethers"
-  chain: sepolia
+  chain: arbitrumSepolia
+
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
 
 grader:
-  type: compile
-  setup: ./graders/zerodev-base/setup.sh
-  run: ./graders/zerodev-base/typecheck.sh
+  type: e2e
+  run: ./graders/zerodev-base/e2e.sh
 
 budget:
   max_turns: 12
@@ -52,12 +50,12 @@ budget:
 
 human_check:
   start_command: "npm run dev"
-  url: "http://localhost:5173"
+  url: "http://localhost:3000"
   what_to_do: >
-    Load the page. A session key should be created on mount and the MintButton
-    should use it to mint without any user signature prompt.
+    Load the page. A session key should be created on mount. Clicking "Mint NFT"
+    should mint via the session key (no second wallet approval) and show a hash.
   checklist:
     - "Page loads with no console errors"
-    - "The session key creation step completes without a signature prompt"
+    - "Session key is created silently on mount (a status like 'Session ready' may appear)"
     - "A 'Mint NFT' button is visible"
-    - "Clicking it mints using the session key and shows a userOp hash"
+    - "Clicking it sends via session key and shows a userOp hash (0x...)"

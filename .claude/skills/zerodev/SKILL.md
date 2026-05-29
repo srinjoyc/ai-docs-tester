@@ -10,7 +10,7 @@ metadata:
 
 ## Product summary
 
-ZeroDev is a smart account SDK that abstracts away gas fees, seed phrases, and complex transaction flows for Web3 applications. It provides the Kernel smart account (ERC-4337 and EIP-7702 compatible), bundler and paymaster infrastructure, and integrations with auth providers like Privy, Dynamic, and Magic. Key files and commands: install `@zerodev/sdk` and `@zerodev/ecdsa-validator`; get your RPC URL from the [ZeroDev dashboard](https://dashboard.zerodev.app); use `createKernelAccount` and `createKernelAccountClient` to set up accounts; configure gas policies via the dashboard or Admin API at `https://api.zerodev.app`. The primary docs site is https://ocl-de73b1a4.mintlify.app.
+ZeroDev is a smart account SDK that abstracts away gas fees, seed phrases, and complex transaction flows for Web3 applications. It provides the Kernel smart account (ERC-4337 and EIP-7702 compatible), bundler and paymaster infrastructure, and integrations with auth providers like Privy, Dynamic, and Magic. Key files and commands: install `@zerodev/sdk` and `@zerodev/ecdsa-validator`; get your RPC URL from the [ZeroDev dashboard](https://dashboard.zerodev.app); use `createKernelAccount` and `createKernelAccountClient` to set up accounts; configure gas policies via the dashboard or Admin API at `https://api.zerodev.app`. The primary docs site is https://zerodev-preview.mintlify.app.
 
 ## When to use
 
@@ -36,7 +36,7 @@ npm i @zerodev/sdk @zerodev/ecdsa-validator
 For passkeys: `npm i @zerodev/passkey-validator`  
 For permissions/session keys: `npm i @zerodev/permissions`
 
-### Core setup pattern
+### Core setup pattern (with gas sponsorship)
 
 ```typescript
 import { createKernelAccount, createKernelAccountClient, createZeroDevPaymasterClient } from "@zerodev/sdk"
@@ -48,8 +48,47 @@ const entryPoint = getEntryPoint("0.7")  // Use 0.7 for new projects
 const publicClient = createPublicClient({ transport: http(RPC_URL), chain })
 const ecdsaValidator = await signerToEcdsaValidator(publicClient, { signer, entryPoint, kernelVersion: KERNEL_V3_1 })
 const account = await createKernelAccount(publicClient, { plugins: { sudo: ecdsaValidator }, entryPoint, kernelVersion: KERNEL_V3_1 })
-const kernelClient = createKernelAccountClient({ account, chain, bundlerTransport: http(ZERODEV_RPC), client: publicClient })
+
+// Gas sponsorship: createZeroDevPaymasterClient calls zd_sponsorUserOperation on PAYMASTER_URL
+const paymasterClient = createZeroDevPaymasterClient({ chain, transport: http(PAYMASTER_URL) })
+
+const kernelClient = createKernelAccountClient({
+  account, chain,
+  bundlerTransport: http(BUNDLER_URL),
+  client: publicClient,
+  paymaster: {
+    getPaymasterData: (userOperation) =>
+      paymasterClient.sponsorUserOperation({ userOperation }),
+  },
+})
+
+// Send a transaction (waits for receipt, returns tx hash)
+const txHash = await kernelClient.sendTransaction({ to, value: 0n, data })
+
+// Or send a raw UserOp and wait explicitly
+const userOpHash = await kernelClient.sendUserOperation({ callData })
+const receipt = await kernelClient.waitForUserOperationReceipt({ hash: userOpHash })
+const txHash2 = receipt.receipt.transactionHash
 ```
+
+### React/wagmi integration — converting WalletClient to Signer
+
+When using wagmi's `useWalletClient()`, the returned `WalletClient` has `account: Account | undefined`. The `signerToEcdsaValidator` signer parameter requires `account` to be non-optional. Guard and cast explicitly:
+
+```typescript
+import { type Account, type Chain, type Transport, type WalletClient } from "viem"
+
+const { data: walletClient } = useWalletClient()
+
+// In your handler:
+if (!walletClient || !walletClient.account) return;
+
+// Cast to the Signer-compatible type (account is guaranteed non-null after the guard above)
+const signer = walletClient as WalletClient<Transport, Chain | undefined, Account>;
+const ecdsaValidator = await signerToEcdsaValidator(publicClient, { signer, entryPoint, kernelVersion: KERNEL_V3_1 });
+```
+
+Note: `walletClientToSmartAccountSigner` from `permissionless` was removed in permissionless v0.3+. Use the explicit guard-and-cast pattern above instead.
 
 ### RPC URL format
 
@@ -203,11 +242,11 @@ Before submitting work with ZeroDev:
 
 ## Resources
 
-- **Comprehensive navigation** — See [llms.txt](https://ocl-de73b1a4.mintlify.app/llms.txt) for a complete page-by-page listing of all documentation.
-- **[Quickstart: Send Your First Gasless Transaction](https://ocl-de73b1a4.mintlify.app/sdk/quickstart)** — Five-minute walkthrough to create an account and send a sponsored UserOp.
-- **[Core API: Create an Account](https://ocl-de73b1a4.mintlify.app/sdk/core-api/create-account)** — Detailed reference for account creation, EntryPoint selection, and Kernel versions.
-- **[Gas Policies Guide](https://ocl-de73b1a4.mintlify.app/meta-infra/gas-policies)** — How to configure sponsorship rules and rate limits.
+- **Comprehensive navigation** — See [llms.txt](https://zerodev-preview.mintlify.app/llms.txt) for a complete page-by-page listing of all documentation.
+- **[Quickstart: Send Your First Gasless Transaction](https://zerodev-preview.mintlify.app/sdk/quickstart)** — Five-minute walkthrough to create an account and send a sponsored UserOp.
+- **[Core API: Create an Account](https://zerodev-preview.mintlify.app/sdk/core-api/create-account)** — Detailed reference for account creation, EntryPoint selection, and Kernel versions.
+- **[Gas Policies Guide](https://zerodev-preview.mintlify.app/meta-infra/gas-policies)** — How to configure sponsorship rules and rate limits.
 
 ---
 
-> For additional documentation and navigation, see: https://ocl-de73b1a4.mintlify.app/llms.txt
+> For additional documentation and navigation, see: https://zerodev-preview.mintlify.app/llms.txt

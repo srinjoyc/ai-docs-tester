@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Writes a working Next.js + RainbowKit + wagmi + EOA mint scaffold into WORK_DIR.
+# Writes a working Next.js + wagmi + EOA mint scaffold into WORK_DIR.
 # Uses Next.js Pages Router (simpler for hook-heavy web3 code — no "use client" needed).
 # Does NOT install packages — caller does that with vendor-specific deps.
 #
 # Written files:
 #   package.json, tsconfig.json, next.config.ts, next-env.d.ts
-#   src/pages/_app.tsx         — WagmiProvider + QueryClientProvider + RainbowKitProvider
-#   src/pages/index.tsx        — ConnectButton + MintButton when connected
+#   src/pages/_app.tsx         — WagmiProvider + QueryClientProvider
+#   src/pages/index.tsx        — simple Connect Wallet button + MintButton when connected
 #   src/components/MintButton.tsx — working EOA mint via useWriteContract
 #
 # NOT written (caller must write):
@@ -52,7 +52,18 @@ EOF
 
 cat > "$WORK_DIR/next.config.ts" <<'EOF'
 import type { NextConfig } from "next";
-const nextConfig: NextConfig = {};
+
+// Expose vendor-specific env vars to the browser bundle.
+// Vars here are inlined at dev/build time from the server environment.
+const nextConfig: NextConfig = {
+  env: {
+    BUNDLER_URL: process.env.BUNDLER_URL ?? "",
+    PAYMASTER_URL: process.env.PAYMASTER_URL ?? "",
+    ZERODEV_PROJECT_ID: process.env.ZERODEV_PROJECT_ID ?? "",
+    SMART_ROUTING_SERVER_URL: process.env.SMART_ROUTING_SERVER_URL ?? "",
+    NFT_CONTRACT: process.env.NFT_CONTRACT ?? "",
+  },
+};
 export default nextConfig;
 EOF
 
@@ -68,7 +79,6 @@ cat > "$WORK_DIR/src/pages/_app.tsx" <<'EOF'
 import type { AppProps } from "next/app";
 import { WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RainbowKitProvider } from "@rainbow-me/rainbowkit";
 import { wagmiConfig } from "../lib/config";
 
 const queryClient = new QueryClient();
@@ -77,28 +87,37 @@ export default function App({ Component, pageProps }: AppProps) {
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider>
-          <Component {...pageProps} />
-        </RainbowKitProvider>
+        <Component {...pageProps} />
       </QueryClientProvider>
     </WagmiProvider>
   );
 }
 EOF
 
-# index.tsx — main page
+# index.tsx — main page with simple connect/disconnect UI
 cat > "$WORK_DIR/src/pages/index.tsx" <<'EOF'
-import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount } from "wagmi";
+import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { MintButton } from "../components/MintButton";
 
 export default function Home() {
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
+  const { connect, connectors } = useConnect();
+  const { disconnect } = useDisconnect();
+
   return (
     <div>
       <h1>dApp Starter</h1>
-      <ConnectButton />
-      {isConnected && <MintButton />}
+      {!isConnected ? (
+        <button onClick={() => connect({ connector: connectors[0] })}>
+          Connect Wallet
+        </button>
+      ) : (
+        <>
+          <p>Connected: {address}</p>
+          <button onClick={() => disconnect()}>Disconnect</button>
+          <MintButton />
+        </>
+      )}
     </div>
   );
 }

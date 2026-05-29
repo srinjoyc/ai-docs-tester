@@ -26,6 +26,10 @@ def _mean(xs: list[float]) -> float:
     return statistics.mean(xs) if xs else 0.0
 
 
+def _med_int(xs: list[int]) -> int:
+    return int(statistics.median(xs)) if xs else 0
+
+
 def write_summary_json(results: list[RunResult], out_path: Path) -> None:
     """Persist raw results so the report can be regenerated without rerunning."""
     serialized = []
@@ -41,9 +45,12 @@ def write_summary_json(results: list[RunResult], out_path: Path) -> None:
 def load_summary_json(path: Path) -> list[RunResult]:
     raw = json.loads(path.read_text())
     out = []
+    _known = {f.name for f in RunResult.__dataclass_fields__.values()}  # type: ignore[attr-defined]
     for d in raw:
         d["transcript_path"] = Path(d["transcript_path"])
         d["code_dir"] = Path(d["code_dir"])
+        # Drop unknown keys so old summaries load cleanly after schema changes.
+        d = {k: v for k, v in d.items() if k in _known}
         out.append(RunResult(**d))
     return out
 
@@ -96,6 +103,55 @@ def render_rich_summary(results: list[RunResult], console: Console) -> None:
         time_table.add_row(*row)
 
     console.print(time_table)
+
+    # ── Capabilities table (targets that have been discovered) ────────────────
+    targets_with_caps = [
+        r for r in results if r.discovered_capabilities is not None
+    ]
+    if targets_with_caps:
+        cap_seen: dict[str, dict] = {}
+        for r in targets_with_caps:
+            if r.target_name not in cap_seen and r.discovered_capabilities:
+                cap_seen[r.target_name] = r.discovered_capabilities
+        cap_table = Table(title="Discovered site capabilities", show_lines=True)
+        cap_table.add_column("target", style="bold")
+        cap_table.add_column("llms-full.txt", justify="center")
+        cap_table.add_column("llms.txt", justify="center")
+        cap_table.add_column("skill.md", justify="center")
+        cap_table.add_column("mcp", justify="center")
+        cap_table.add_column("markdown", justify="center")
+        for tname, caps in sorted(cap_seen.items()):
+            cap_table.add_row(
+                tname,
+                "[green]✓[/green]" if caps.get("has_llms_full_txt") else "[dim]·[/dim]",
+                "[green]✓[/green]" if caps.get("has_llms_txt") else "[dim]·[/dim]",
+                "[green]✓[/green]" if caps.get("has_skill_md") else "[dim]·[/dim]",
+                "[green]✓[/green]" if caps.get("has_mcp") else "[dim]·[/dim]",
+                ", ".join(caps.get("markdown_suffixes") or []) or "[dim]·[/dim]",
+            )
+        console.print(cap_table)
+
+    # ── Observability summary ────────────────────────────────────────────────
+    obs_table = Table(title="Agent observability (medians)", show_lines=True)
+    obs_table.add_column("target", style="bold")
+    obs_table.add_column("mode", justify="center")
+    obs_table.add_column("reads", justify="right")
+    obs_table.add_column("writes", justify="right")
+    obs_table.add_column("grader calls", justify="right")
+    obs_table.add_column("turns→grader", justify="right")
+    for target in targets:
+        for mode in modes:
+            cells = [r for r in results if r.target_name == target and r.mode == mode]
+            if not cells:
+                continue
+            obs_table.add_row(
+                target, mode,
+                f"{_med_int([r.file_reads for r in cells])}",
+                f"{_med_int([r.file_writes for r in cells])}",
+                f"{_med_int([r.grader_calls for r in cells])}",
+                f"{_med_int([r.turns_to_first_grader for r in cells if r.turns_to_first_grader])}",
+            )
+    console.print(obs_table)
 
     # ── Failure summary ──────────────────────────────────────────────────────
     failed = [r for r in results if not r.passed]
@@ -196,6 +252,106 @@ def render_markdown(results: list[RunResult]) -> str:
         row.append(_fmt_pass_at_1(all_cells))
         lines.append("| " + " | ".join(row) + " |")
     lines.append("")
+
+    # ---- Discovered capabilities ----
+    cap_seen: dict[str, dict] = {}
+    for r in results:
+        if r.target_name not in cap_seen and r.discovered_capabilities:
+            cap_seen[r.target_name] = r.discovered_capabilities
+    if cap_seen:
+        lines.append("## Discovered site capabilities")
+        lines.append("")
+        lines.append("| target | llms-full.txt | llms.txt | skill.md | mcp | markdown |")
+        lines.append("|---|---|---|---|---|---|")
+        for tname, caps in sorted(cap_seen.items()):
+            lines.append(
+                f"| {tname} "
+                f"| {'✓' if caps.get('has_llms_full_txt') else '·'} "
+                f"| {'✓' if caps.get('has_llms_txt') else '·'} "
+                f"| {'✓' if caps.get('has_skill_md') else '·'} "
+                f"| {'✓' if caps.get('has_mcp') else '·'} "
+                f"| {', '.join(caps.get('markdown_suffixes') or []) or '·'} |"
+            )
+        lines.append("")
+
+    # ---- Observability: agent effort ----
+    lines.append("## Agent effort (medians per target × mode)")
+    lines.append("")
+    lines.append("| target | mode | file reads | file writes | grader calls | turns→grader | turns→pass |")
+    lines.append("|---|---|---|---|---|---|---|")
+    for target in targets:
+        for mode in modes:
+            cells = [r for r in results if r.target_name == target and r.mode == mode]
+            if not cells:
+                continue
+            ttg = [r.turns_to_first_grader for r in cells if r.turns_to_first_grader]
+            tts = [r.turns_to_success for r in cells if r.turns_to_success]
+            lines.append(
+                f"| {target} | {mode} "
+                f"| {_med_int([r.file_reads for r in cells])} "
+                f"| {_med_int([r.file_writes for r in cells])} "
+                f"| {_med_int([r.grader_calls for r in cells])} "
+                f"| {_med_int(ttg) if ttg else '—'} "
+                f"| {_med_int(tts) if tts else '—'} |"
+            )
+    lines.append("")
+
+    # ---- Resource inventory ----
+    resource_rows = [(r, res) for r in results for res in r.doc_resources]
+    if resource_rows:
+        lines.append("## Documentation resource usage")
+        lines.append("")
+        # Aggregate by (target, mode, url)
+        agg: dict[tuple[str, str, str], dict] = {}
+        for r, res in resource_rows:
+            key = (r.target_name, r.mode, res["url"])
+            if key not in agg:
+                agg[key] = {**res, "target": r.target_name, "mode": r.mode, "run_count": 0}
+            agg[key]["run_count"] += 1
+            agg[key]["times_accessed"] = (
+                agg[key].get("times_accessed", 0) + res.get("times_accessed", 0)
+            )
+        lines.append("| target | mode | resource_type | url | times accessed |")
+        lines.append("|---|---|---|---|---|")
+        for key, entry in sorted(agg.items()):
+            url_short = entry["url"][:80]
+            lines.append(
+                f"| {entry['target']} | {entry['mode']} "
+                f"| {entry['resource_type']} | {url_short} "
+                f"| {entry.get('times_accessed', '—')} |"
+            )
+        lines.append("")
+
+    # ---- Self-report summary (auto modes) ----
+    self_reported = [r for r in results if r.agent_self_report is not None]
+    if self_reported:
+        lines.append("## Agent self-reports (auto modes)")
+        lines.append("")
+        lines.append("| target | mode | run | most_useful | used_prior_knowledge | mismatches |")
+        lines.append("|---|---|---|---|---|---|")
+        for r in sorted(self_reported, key=lambda r: (r.target_name, r.mode, r.run_idx)):
+            sr = r.agent_self_report or {}
+            most_useful = sr.get("most_useful_resource") or "—"
+            if isinstance(most_useful, str) and len(most_useful) > 60:
+                most_useful = most_useful[:57] + "…"
+            mismatches = len(r.self_report_mismatches)
+            lines.append(
+                f"| {r.target_name} | {r.mode} | r{r.run_idx} "
+                f"| {most_useful} "
+                f"| {'yes' if sr.get('used_prior_knowledge') else 'no'} "
+                f"| {mismatches} |"
+            )
+        lines.append("")
+        # Mismatch details
+        mismatched = [r for r in self_reported if r.self_report_mismatches]
+        if mismatched:
+            lines.append("### Self-report mismatches (tool logs vs. agent claims)")
+            lines.append("")
+            for r in mismatched:
+                lines.append(f"**{r.use_case_id} / {r.target_name} / {r.mode} / r{r.run_idx}**")
+                for m in r.self_report_mismatches:
+                    lines.append(f"- {m}")
+            lines.append("")
 
     # ---- Human review summary (only shown if any results have it) ----
     reviewed = [r for r in results if r.human_review_passed is not None]

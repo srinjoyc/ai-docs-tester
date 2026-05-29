@@ -1,0 +1,61 @@
+id: zerodev-06-sra
+vendor: zerodev
+title: Create a Smart Routing Address so users can receive funds from any chain
+difficulty: 3
+tags: [cross-chain, sra]
+
+prompt: |
+  I want to give users a single deposit address they can share with anyone — funds
+  sent to it from any chain automatically route to their smart account. It should
+  work like a universal inbox for their account.
+
+  Add a "Get Smart Address" button that:
+  - Creates a Smart Routing Address (SRA) for the connected wallet using
+    createSmartRoutingAddress from @zerodev/smart-routing-address
+  - Calls getSmartRoutingAddressStatus to get the current balance and activation status
+  - Displays the SRA address, ETH balance, and whether it is active on the page
+
+  Files available: src/lib/config.ts (BUNDLER_URL, PAYMASTER_URL,
+  SMART_ROUTING_SERVER_URL), src/components/MintButton.tsx.
+  Packages installed: @zerodev/sdk, @zerodev/ecdsa-validator,
+  @zerodev/smart-routing-address, permissionless, viem.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/ecdsa-validator"
+    - "@zerodev/smart-routing-address"
+    - "viem"
+  calls:
+    - "createKernelAccount"
+    - "createKernelAccountClient"
+    - "createSmartRoutingAddress"
+    - "getSmartRoutingAddressStatus"
+  forbidden:
+    - "ethers"
+  chain: arbitrumSepolia
+
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
+
+grader:
+  type: e2e
+  run: ./graders/zerodev-base/e2e.sh
+  env:
+    GRADER_SCENARIO: "sra"
+
+budget:
+  max_turns: 10
+  max_seconds: 300
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:3000"
+  what_to_do: >
+    Connect wallet then click "Get Smart Address". Should display the SRA address,
+    its ETH balance, and activation status.
+  checklist:
+    - "Page loads with no console errors"
+    - "'Get Smart Address' button appears after connecting"
+    - "Clicking shows an Ethereum address (0x...)"
+    - "Balance and status (active/pending) are displayed"

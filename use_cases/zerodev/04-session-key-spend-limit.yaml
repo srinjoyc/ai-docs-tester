@@ -1,0 +1,62 @@
+id: zerodev-04-spend-limit
+vendor: zerodev
+title: Session key with a daily ETH spend cap
+difficulty: 4
+tags: [session-keys, permissions, spend-limit]
+
+prompt: |
+  I want to give a session key limited spending power — it should only be able to
+  send up to 0.00001 ETH per day so it can never drain the account.
+
+  Set up the page so it creates a session key with a daily spend cap of 0.00001 ETH.
+  Add two buttons to demonstrate the limit:
+  - "Send 0.000005 ETH" — sends 0.000005 ETH to the user's own address (within the
+    daily limit, should succeed and show the transaction hash)
+  - "Send 0.00002 ETH" — attempts to send 0.00002 ETH (over the daily limit, should
+    be rejected and display an error message on the page)
+
+  Both outcomes (hash on success, error on rejection) should be visible on the page
+  without a page reload.
+
+  Files available: src/lib/config.ts (BUNDLER_URL, PAYMASTER_URL),
+  src/components/MintButton.tsx.
+  Packages installed: @zerodev/sdk, @zerodev/ecdsa-validator, @zerodev/permissions,
+  permissionless, viem.
+
+expected:
+  imports:
+    - "@zerodev/sdk"
+    - "@zerodev/permissions"
+    - "viem"
+  calls:
+    - "toECDSASigner"
+    - "toPermissionValidator"
+    - "toSpendingLimitPolicy"
+  forbidden:
+    - "ethers"
+  chain: arbitrumSepolia
+
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
+
+grader:
+  type: e2e
+  run: ./graders/zerodev-base/e2e.sh
+  env:
+    GRADER_SCENARIO: "spend-limit"
+
+budget:
+  max_turns: 12
+  max_seconds: 360
+
+human_check:
+  start_command: "npm run dev"
+  url: "http://localhost:3000"
+  what_to_do: >
+    Click "Send 0.000005 ETH" — should show a tx hash. Then click
+    "Send 0.00002 ETH" — should show a rejection/error message.
+  checklist:
+    - "Page loads with no console errors"
+    - "Both 'Send' buttons are visible after connecting"
+    - "First send shows a transaction hash"
+    - "Second send shows an error indicating the spend limit was exceeded"
