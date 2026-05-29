@@ -38,7 +38,7 @@ EOF
 # -- src/lib/config.ts (ZeroDev-specific) -------------------------------------
 cat > src/lib/config.ts <<'EOF'
 import { http } from "viem";
-import { arbitrumSepolia } from "wagmi/chains";
+import { arbitrumSepolia } from "viem/chains";
 import { createConfig, injected } from "wagmi";
 
 // NFT contract with a public mint() function deployed on Arbitrum Sepolia

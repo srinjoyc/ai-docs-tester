@@ -56,11 +56,18 @@ if [ -n "${ZERODEV_PROJECT_ID:-}" ]; then
   fi
 fi
 
-# ── Step 3: pick a free port so parallel cells don't conflict ─────────────────
-PORT=$(python3 -c \
-  "import socket; s=socket.socket(); s.bind(('',0)); p=s.getsockname()[1]; s.close(); print(p)")
+# ── Step 3: pick a port so parallel cells don't conflict ─────────────────────
+# Some sandboxed runners disallow opening sockets before the dev server starts,
+# so avoid the usual "bind to :0 then close" free-port probe here. Next.js will
+# fail clearly below if the selected port is unavailable.
+PORT="${PLAYWRIGHT_PORT:-$((3000 + (RANDOM % 1000)))}"
 
 echo "[e2e] port: $PORT"
+
+# Codex/agent runs may leave a .next cache built under a different environment.
+# Reusing it in the grader can produce duplicate React instances and invalid
+# hook errors, so always let Next.js compile fresh for the E2E run.
+rm -rf .next
 
 # ── Step 4: start Next.js dev server in background ───────────────────────────
 export WORK_DIR="$WORK_DIR"
@@ -79,18 +86,41 @@ NEXT_PID=$!
 
 # Poll until the server responds or timeout (120s)
 _ready=0
-for _i in $(seq 1 24); do
-  sleep 5
-  _code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}" 2>/dev/null || echo "000")
-  echo "[e2e] waiting for server... attempt ${_i}/24 (HTTP ${_code})"
+_attempts="${SERVER_READY_ATTEMPTS:-24}"
+_interval="${SERVER_READY_INTERVAL:-5}"
+_max_5xx="${SERVER_READY_MAX_5XX:-3}"
+_consecutive_5xx=0
+for _i in $(seq 1 "$_attempts"); do
+  sleep "$_interval"
+  if ! kill -0 "$NEXT_PID" 2>/dev/null; then
+    echo "[e2e] ERROR: Next.js server exited before becoming ready"
+    echo "[e2e] Last 20 lines of server log:"
+    tail -20 /tmp/nextjs-$PORT.log 2>/dev/null || true
+    exit 1
+  fi
+  _code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}" 2>/dev/null || true)
+  _code="${_code:-000}"
+  echo "[e2e] waiting for server... attempt ${_i}/${_attempts} (HTTP ${_code})"
   if [[ "$_code" =~ ^[2-4] ]]; then
     _ready=1
     break
   fi
+  if [[ "$_code" =~ ^5 ]]; then
+    _consecutive_5xx=$((_consecutive_5xx + 1))
+    if [ "$_consecutive_5xx" -ge "$_max_5xx" ]; then
+      echo "[e2e] ERROR: Next.js returned ${_consecutive_5xx} consecutive 5xx responses"
+      echo "[e2e] Last 40 lines of server log:"
+      tail -40 /tmp/nextjs-$PORT.log 2>/dev/null || true
+      kill "$NEXT_PID" 2>/dev/null
+      exit 1
+    fi
+  else
+    _consecutive_5xx=0
+  fi
 done
 
 if [ "$_ready" -eq 0 ]; then
-  echo "[e2e] ERROR: Next.js server did not start within 120s"
+  echo "[e2e] ERROR: Next.js server did not start within $((_attempts * _interval))s"
   echo "[e2e] Last 20 lines of server log:"
   tail -20 /tmp/nextjs-$PORT.log 2>/dev/null || true
   kill "$NEXT_PID" 2>/dev/null

@@ -96,6 +96,7 @@ class RunnerConfig:
     work_root: Path                  # parent of per-cell code dirs
     transcript_root: Path
     model: str = DEFAULT_MODEL
+    backend: str = os.environ.get("DOCS_EVAL_BACKEND", "auto")
     verbose: bool = False
     human_review: bool = False       # pause for human inspection after grader passes
     agentmail_api_key: str = field(
@@ -1287,6 +1288,178 @@ def _run_loop_claude(
     return turns, total_in, total_out
 
 
+def _run_loop_codex(
+    state: _AgentState,
+    use_case: "UseCase",
+    target: "Target",
+    mode: str,
+    system: str,
+    cfg: "RunnerConfig",
+    work_dir: Path,
+) -> tuple[int, int, int]:
+    """Run the agent once through `codex exec`.
+
+    Unlike the OpenAI and Claude paths, Codex CLI owns its own tool loop and
+    edits the worktree directly. We therefore run Codex to completion, then run
+    this benchmark's grader ourselves so the pass/fail contract stays identical.
+    """
+    import shutil
+    import tempfile
+
+    if shutil.which("codex") is None:
+        raise RuntimeError(
+            "codex CLI not found in PATH — install or authenticate Codex CLI first"
+        )
+
+    grader_cfg = use_case.grader
+    run_script = Path(grader_cfg["run"])
+    if not run_script.is_absolute():
+        project_root = use_case.source_path.parents[2]
+        run_script = project_root / run_script
+
+    codex_model = os.environ.get("DOCS_EVAL_CODEX_MODEL", "")
+    if not codex_model and cfg.model and not cfg.model.startswith("claude"):
+        codex_model = cfg.model
+    if not codex_model:
+        codex_model = "gpt-5.5"
+
+    prompt_parts = [
+        "You are editing a freshly scaffolded app for a docs-eval benchmark.",
+        f"Vendor docs are at: {target.base_url}",
+        "",
+        "Task:",
+        use_case.prompt,
+        "",
+        "Edit scope:",
+        "- Work only inside the current scaffold directory.",
+        "- Prefer the files named in the task prompt.",
+        "- Do not edit benchmark runner files, graders, use_cases, or files outside this app.",
+        "",
+        "Validation contract:",
+        "- The benchmark runner will run the grader after you exit.",
+        "- Do not start dev servers, run Playwright, run the benchmark grader, or run npm build.",
+        "- If you need a quick check, run only TypeScript typecheck once.",
+        "- When the feature is implemented, stop immediately with a short summary.",
+    ]
+    expected_imports = use_case.expected.get("imports") or []
+    expected_calls = use_case.expected.get("calls") or []
+    forbidden = use_case.expected.get("forbidden") or []
+    if expected_imports or expected_calls or forbidden:
+        prompt_parts += ["", "The grader will look for these implementation signals:"]
+        if expected_imports:
+            prompt_parts.append(f"- Required import substrings: {expected_imports}")
+        if expected_calls:
+            prompt_parts.append(f"- Required call substrings: {expected_calls}")
+        if forbidden:
+            prompt_parts.append(f"- Forbidden substrings: {forbidden}")
+    prompt = "\n".join(prompt_parts)
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, prefix="docs_eval_codex_last_"
+    ) as f:
+        last_message_path = f.name
+
+    cmd = ["codex"]
+    if mode in ("web", "auto-informed", "auto-blind"):
+        cmd.append("--search")
+    cmd += [
+        "exec",
+        "--cd", str(work_dir.resolve()),
+        "--sandbox", "workspace-write",
+        "--output-last-message", last_message_path,
+        "--color", "never",
+    ]
+    if codex_model:
+        cmd += ["--model", codex_model]
+    cmd.append(prompt)
+
+    if cfg.verbose:
+        model_note = f" --model {codex_model}" if codex_model else ""
+        print(f"  [codex-cli] running: codex exec ...{model_note}")
+
+    start = time.time()
+    codex_timed_out = False
+    codex_returncode: int | None = None
+    codex_tokens_used = 0
+    try:
+        codex_timeout = int(
+            os.environ.get(
+                "DOCS_EVAL_CODEX_TIMEOUT",
+                str(min(use_case.max_seconds, 180)),
+            )
+        )
+    except ValueError:
+        codex_timeout = min(use_case.max_seconds, 180)
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=codex_timeout,
+        )
+        codex_returncode = proc.returncode
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        import re
+        token_match = re.search(r"tokens used\s+([\d,]+)", stdout + "\n" + stderr)
+        if token_match:
+            codex_tokens_used = int(token_match.group(1).replace(",", ""))
+        try:
+            final_text = Path(last_message_path).read_text(errors="replace")
+        except OSError:
+            final_text = ""
+        if final_text:
+            state.last_assistant_text = final_text
+        state.log("codex_cli", {
+            "returncode": proc.returncode,
+            "stdout_tail": stdout[-4000:],
+            "stderr_tail": stderr[-4000:],
+            "final_message": final_text[-4000:],
+            "tokens_used": codex_tokens_used,
+            "wall_seconds": round(time.time() - start, 2),
+        })
+        if proc.returncode != 0 and cfg.verbose:
+            print(f"  [codex-cli] exited {proc.returncode}")
+            for ln in (stderr or stdout).strip().splitlines()[-8:]:
+                print(f"            {ln}")
+    except subprocess.TimeoutExpired as e:
+        codex_timed_out = True
+        stdout = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+        stderr = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        state.log("codex_cli_timeout", {
+            "stdout_tail": stdout[-4000:],
+            "stderr_tail": stderr[-4000:],
+            "after_seconds": codex_timeout,
+        })
+        if cfg.verbose:
+            print(f"  [codex-cli] TIMEOUT after {codex_timeout}s")
+    finally:
+        try:
+            os.unlink(last_message_path)
+        except OSError:
+            pass
+
+    if codex_returncode not in (0, None):
+        if cfg.verbose:
+            print("  [grader] skipped after Codex CLI failure")
+        return 1, 0, 0
+
+    if cfg.verbose:
+        suffix = " after Codex timeout" if codex_timed_out else " after Codex"
+        print(f"  [grader] running final grader{suffix}")
+    result = _run_grader(state)
+    state.turns_to_first_grader = state.turns_to_first_grader or 1
+    if result.get("pass"):
+        state.turns_to_success = state.turns_to_success or 1
+    if cfg.verbose:
+        print(f"  [grader]  {'PASS' if result.get('pass') else 'FAIL'}")
+
+    # Codex CLI reports a single aggregate token count, not input/output split.
+    # Store it in input_tokens so existing reports include the usage total.
+    return 1, codex_tokens_used, 0
+
+
 # --- Main run loop ---------------------------------------------------------
 
 def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
@@ -1420,6 +1593,7 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
         "mode": mode,
         "run_idx": run_idx,
         "model": cfg.model,
+        "backend": cfg.backend,
         "llms_txt_truncated": truncated,
         "setup_seconds": round(setup_elapsed, 2),
         "work_dir": str(work_dir),
@@ -1437,16 +1611,26 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
         print(f"  [agent] starting — budget: {use_case.max_turns} turns / "
               f"{use_case.max_seconds}s")
 
+    backend = cfg.backend
+    if backend == "auto":
+        backend = "claude" if _is_claude_model(cfg.model) else "openai"
+
     try:
-        if _is_claude_model(cfg.model):
+        if backend == "codex":
+            turns, total_in, total_out = _run_loop_codex(
+                state, use_case, target, mode, system, cfg, work_dir
+            )
+        elif backend == "claude":
             turns, total_in, total_out = _run_loop_claude(
                 state, use_case, target, mode, system, tools, cfg,
                 work_dir, setup_elapsed,
             )
-        else:
+        elif backend == "openai":
             turns, total_in, total_out = _run_loop_openai(
                 state, use_case, target, mode, system, tools, cfg,
             )
+        else:
+            raise ValueError(f"unknown backend: {cfg.backend}")
 
         # ── Step 4: optional human review ────────────────────────────────────
         if state.last_pass and cfg.human_review and use_case.human_check:
