@@ -13,6 +13,11 @@ prompt: |
 
   After minting, display the transaction hash on the page.
 
+  Note: for the normal ZeroDev bundler/paymaster SDK flow, full project-scoped
+  BUNDLER_URL and PAYMASTER_URL values are sufficient. A separate
+  ZERODEV_PROJECT_ID is only needed if you choose to construct those URLs
+  yourself or use a project-id-based API.
+
 expected:
   imports:
     - "@zerodev/sdk"

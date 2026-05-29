@@ -235,6 +235,9 @@ implementing fake values and output a JSON block like this:
   ]
 }
 ```
+For this ZeroDev gas-sponsorship flow, full project-scoped BUNDLER_URL and
+PAYMASTER_URL values are sufficient. Ask for ZERODEV_PROJECT_ID only if you
+need to construct those URLs yourself or call a project-id-based API.
 The benchmark runner will reply as the user if the request is specific enough.
 --- END USER INPUT REQUESTS ---"""
 
@@ -301,7 +304,7 @@ def _agent_prompt(
         "- Treat the target docs location as authoritative for this run.",
         "- Write TypeScript with proper types — no `any`, no missing imports.",
         "- Read config/env from existing files; don't hardcode secrets.",
-        "- If BUNDLER_URL, PAYMASTER_URL, ZERODEV_PROJECT_ID, or any other vendor project/dashboard/paymaster/sponsorship config is empty or missing, stop and output a JSON block with `needs_user_input` listing the exact missing values and why you need them. Do this before adding fallback runtime errors. Do not invent IDs, admin tokens, paymaster policies, or sponsorship credentials.",
+        "- If BUNDLER_URL, PAYMASTER_URL, or any other vendor project/dashboard/paymaster/sponsorship config needed for the chosen implementation is empty or missing, stop and output a JSON block with `needs_user_input` listing the exact missing values and why you need them. For ZeroDev, a separate ZERODEV_PROJECT_ID is only needed if you must construct project-scoped URLs yourself or call project-id-based APIs; full BUNDLER_URL and PAYMASTER_URL values already contain the project context for normal bundler/paymaster transports. Do this before adding fallback runtime errors. Do not invent IDs, admin tokens, paymaster policies, or sponsorship credentials.",
         "- Preserve existing starter code unless the task says to change it.",
         "- Do not edit benchmark runner files, graders, use_cases, or files outside this app.",
     ]
@@ -945,7 +948,10 @@ def _infer_user_input_request(text: str) -> dict[str, Any] | None:
     upper = text.upper()
     requested: list[dict[str, str]] = []
     for name, why in (
-        ("ZERODEV_PROJECT_ID", "ZeroDev project identifier used to derive project RPC endpoints"),
+        (
+            "ZERODEV_PROJECT_ID",
+            "ZeroDev project identifier, only needed when deriving project RPC endpoints or calling project-id APIs",
+        ),
         ("BUNDLER_URL", "ZeroDev bundler RPC URL for sponsored user operations"),
         ("PAYMASTER_URL", "ZeroDev paymaster RPC URL with sponsorship policy"),
     ):
