@@ -9,14 +9,9 @@ prompt: |
   ZeroDev can handle this with a smart account — can you set that up?
 
   The app already has a "Mint NFT" button wired to a basic EOA transaction.
-  Upgrade it so the mint goes through a ZeroDev Kernel smart account with gas
-  sponsorship, so the user pays nothing.
+  Upgrade it so the mint uses ZeroDev to sponsor gas, so the user pays nothing.
 
   After minting, display the transaction hash on the page.
-
-  Files available: src/lib/config.ts (NFT_CONTRACT, NFT_ABI, BUNDLER_URL,
-  PAYMASTER_URL), src/components/MintButton.tsx.
-  Packages installed: @zerodev/sdk, @zerodev/ecdsa-validator, permissionless, viem.
 
 expected:
   imports:

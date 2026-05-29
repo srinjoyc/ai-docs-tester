@@ -38,6 +38,8 @@ def write_summary_json(results: list[RunResult], out_path: Path) -> None:
         # Paths aren't JSON-serializable
         d["transcript_path"] = str(r.transcript_path)
         d["code_dir"] = str(r.code_dir)
+        if r.ai_review_path is not None:
+            d["ai_review_path"] = str(r.ai_review_path)
         serialized.append(d)
     out_path.write_text(json.dumps(serialized, indent=2))
 
@@ -49,6 +51,8 @@ def load_summary_json(path: Path) -> list[RunResult]:
     for d in raw:
         d["transcript_path"] = Path(d["transcript_path"])
         d["code_dir"] = Path(d["code_dir"])
+        if d.get("ai_review_path"):
+            d["ai_review_path"] = Path(d["ai_review_path"])
         # Drop unknown keys so old summaries load cleanly after schema changes.
         d = {k: v for k, v in d.items() if k in _known}
         out.append(RunResult(**d))
@@ -371,6 +375,69 @@ def render_markdown(results: list[RunResult]) -> str:
                         lines.append(f"- {label}: " + "; ".join(str(v) for v in values))
                     else:
                         lines.append(f"- {label}: {values}")
+            lines.append("")
+
+    # ---- AI review summary ----
+    ai_reviewed = [r for r in results if r.ai_review is not None]
+    if ai_reviewed:
+        lines.append("## AI quality review")
+        lines.append("")
+        lines.append("| target | mode | run | score | verdict | likely real-world | critical/major issues |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for r in sorted(ai_reviewed, key=lambda r: (r.target_name, r.mode, r.run_idx)):
+            review = r.ai_review or {}
+            issues = review.get("issues") or []
+            issue_count = 0
+            if isinstance(issues, list):
+                issue_count = sum(
+                    1 for issue in issues
+                    if isinstance(issue, dict) and issue.get("severity") in ("critical", "major")
+                )
+            likely = "yes" if review.get("would_likely_work_real_world") else "no"
+            lines.append(
+                f"| {r.target_name} | {r.mode} | r{r.run_idx} "
+                f"| {review.get('overall_score', '—')} "
+                f"| {review.get('verdict', '—')} "
+                f"| {likely} "
+                f"| {issue_count} |"
+            )
+        lines.append("")
+        for r in sorted(ai_reviewed, key=lambda r: (r.target_name, r.mode, r.run_idx)):
+            review = r.ai_review or {}
+            issues = review.get("issues") or []
+            if not issues:
+                continue
+            lines.append(f"### AI review issues: {r.use_case_id} / {r.target_name} / {r.mode} / r{r.run_idx}")
+            lines.append("")
+            for issue in issues[:8]:
+                if not isinstance(issue, dict):
+                    continue
+                severity = issue.get("severity", "issue")
+                category = issue.get("category", "")
+                evidence = issue.get("evidence", "")
+                recommendation = issue.get("recommendation", "")
+                lines.append(f"- {severity}: {category} — {evidence}")
+                if recommendation:
+                    lines.append(f"  Recommendation: {recommendation}")
+            lines.append("")
+        docs_reviews = [
+            r for r in ai_reviewed
+            if isinstance((r.ai_review or {}).get("zerodev_docs_helpfulness"), dict)
+        ]
+        if docs_reviews:
+            lines.append("### ZeroDev docs helpfulness")
+            lines.append("")
+            lines.append("| target | mode | run | score | assessment |")
+            lines.append("|---|---|---|---|---|")
+            for r in sorted(docs_reviews, key=lambda r: (r.target_name, r.mode, r.run_idx)):
+                docs_review = (r.ai_review or {}).get("zerodev_docs_helpfulness") or {}
+                assessment = str(docs_review.get("assessment", ""))
+                if len(assessment) > 120:
+                    assessment = assessment[:117] + "..."
+                lines.append(
+                    f"| {r.target_name} | {r.mode} | r{r.run_idx} "
+                    f"| {docs_review.get('score', '—')} | {assessment} |"
+                )
             lines.append("")
 
     # ---- Human review summary (only shown if any results have it) ----

@@ -57,7 +57,7 @@ class Target:
 
 
 # Classic modes (--modes default):
-CLASSIC_MODES = ("web", "llms-txt", "mcp", "skill")
+CLASSIC_MODES = ("web", "web-ai-informed", "llms-txt", "mcp", "skill")
 
 # Auto modes run a discovery phase before execution:
 #   auto-informed — discoveries disclosed to agent

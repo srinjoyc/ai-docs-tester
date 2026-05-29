@@ -6,10 +6,9 @@ package because the package requires Python >=3.10 and this project targets
 is a JSON object on a newline; we respond to initialize / tools/list /
 tools/call and ignore everything else.
 
-This server is started as a stdio subprocess per cell by _run_loop_claude()
-in runner.py. We use this path (instead of calling the Anthropic API directly)
-because we don't hold a raw ANTHROPIC_API_KEY — the Claude Code CLI manages
-authentication and we invoke it via `claude -p`.
+This server is started as a stdio subprocess per cell by Claude in runner.py.
+It exposes local file/grader tools and optional URL fetching. Target docs MCP
+endpoints are intentionally left as URL hints for agents to discover/use.
 
 Usage:
     python -m docs_eval.mcp_server \

@@ -89,6 +89,9 @@ class RunResult:
     # Agent self-report (auto modes only) and mismatch analysis
     agent_self_report: dict | None = None
     self_report_mismatches: list = field(default_factory=list)
+    # Optional qualitative AI review, produced after deterministic grading.
+    ai_review: dict | None = None
+    ai_review_path: Path | None = None
 
 
 @dataclass
@@ -155,7 +158,7 @@ def _build_tools(mode: str, target: Target) -> list[dict[str, Any]]:
                       "required": ["message_id"]}),
         ]
 
-    if mode in ("web", "auto-informed", "auto-blind"):
+    if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind"):
         tools.append(_fn_tool(
             "fetch_url",
             "Fetch the text content of any URL (documentation page, API reference, etc.). "
@@ -231,40 +234,59 @@ def _resource_type_from_url(url: str) -> str:
     return "docs"
 
 
-def _system_prompt(use_case: UseCase, target: Target, mode: str,
-                   llms_txt_content: str | None,
-                   skill_content: str | None = None,
-                   capabilities: Any | None = None) -> str:
-    _has_fetch = mode in ("web", "auto-informed", "auto-blind")
-    _has_mcp = mode in ("mcp", "auto-informed") and target.mcp_endpoint
-    tool_list = (
-        "list_files, read_file, write_file, run_grader"
-        + (", fetch_url" if _has_fetch else "")
-        + (", search_docs, query_docs_filesystem" if _has_mcp else "")
-    )
+def _docs_location_hints(target: Target) -> list[str]:
+    """Human-style pointers to docs resources without injecting their contents."""
+    base = target.base_url.rstrip("/")
+    hints = [
+        f"Docs live at: {target.base_url}",
+        f"LLM-friendly docs index: {base}/llms.txt",
+    ]
+    if target.llms_txt and target.llms_txt != f"{base}/llms.txt":
+        hints.append(f"Full LLM docs bundle: {target.llms_txt}")
+    if target.markdown_suffix:
+        hints.append(f"Individual docs pages may also be readable with `{target.markdown_suffix}` appended.")
+    if target.mcp_endpoint:
+        hints.append(f"Docs MCP endpoint, if useful: {target.mcp_endpoint}")
+    return hints
 
+
+def _agent_prompt(
+    use_case: UseCase,
+    target: Target,
+    mode: str,
+    tool_list: str,
+    llms_txt_content: str | None,
+    skill_content: str | None = None,
+    capabilities: Any | None = None,
+    backend_note: str | None = None,
+) -> str:
     parts = [
         "You are a coding agent extending an existing starter app to integrate "
         f"a {target.vendor} SDK feature. The starter app is already scaffolded in the "
         "work directory.",
         "",
-        f"Your tools: {tool_list}. Use ONLY these — do not use Bash or any other tool.",
+        "Task:",
+        use_case.prompt,
+        "",
+        f"Your tools: {tool_list}. Use ONLY these tools and stay inside the scaffolded app.",
         "",
         "Process (stay within budget — do not over-explore):",
-        "1. Call list_files once to see the project structure.",
-        "2. Call read_file on the 1-2 files most relevant to the task.",
-        "3. Use any provided docs context (or fetch/search if available) for the API.",
-        "4. Call write_file to implement the solution.",
-        "5. Call run_grader to typecheck and test. Fix errors, call it again.",
-        "6. When grader passes, reply with one sentence summarising what you added.",
+        "1. Inspect the project structure and the files most relevant to the task.",
+        "2. Use the provided docs context or docs location hints for target-product APIs.",
+        "3. Implement the smallest complete solution for the requested workflow.",
+        "4. Run the available validation path. Fix errors and rerun validation if needed.",
+        "5. When validation passes or you are out of budget, reply with a short summary and the required JSON self-report.",
         "",
         "Rules:",
-        "- Use the docs you're given. Do not invent APIs or guess package names.",
+        "- Use the target docs you're given. Do not invent APIs or guess package names.",
+        "- Treat the target docs location as authoritative for this run.",
         "- Write TypeScript with proper types — no `any`, no missing imports.",
         "- Read config/env from existing files; don't hardcode secrets.",
         "- Preserve existing starter code unless the task says to change it.",
-        "- Move fast: read the minimum, write the code, run the grader.",
+        "- Do not edit benchmark runner files, graders, use_cases, or files outside this app.",
     ]
+    if backend_note:
+        parts += ["", backend_note]
 
     if mode == "llms-txt" and llms_txt_content:
         parts += [
@@ -274,10 +296,9 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             f"--- END {target.vendor.upper()} DOCS ---",
         ]
     elif mode == "web":
-        parts += [
-            "",
-            f"Docs live at: {target.base_url}",
-        ]
+        parts += ["", f"Docs live at: {target.base_url}"]
+    elif mode == "web-ai-informed":
+        parts += [""] + _docs_location_hints(target)
     elif mode == "mcp":
         parts += [
             "",
@@ -291,7 +312,6 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             f"--- END {target.vendor.upper()} SKILL REFERENCE ---",
         ]
     elif mode == "auto-informed" and capabilities is not None:
-        # Natural hint: just mention what's available, like a colleague would
         llms_url = next(
             (r.url for r in capabilities.resources
              if r.resource_type in ("llms-full.txt", "llms.txt")),
@@ -310,10 +330,7 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             hints.append(f"An MCP endpoint is available at {capabilities.mcp_url}.")
         parts += ["", " ".join(hints)]
     elif mode == "auto-blind":
-        parts += [
-            "",
-            f"Docs live at: {target.base_url}",
-        ]
+        parts += [""] + _docs_location_hints(target)
 
     if os.environ.get("AGENTMAIL_API_KEY"):
         parts += [
@@ -322,12 +339,35 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             "Use create_inbox to get a real @agentmail.to address for any signup or OTP flow.",
         ]
 
-    # Ask every backend/mode for the same final resource-use report. For Claude
-    # and OpenAI this rides in the normal system prompt; Codex gets it in its
-    # custom CLI prompt below.
     parts.append(_SELF_REPORT_INSTRUCTION)
-
     return "\n".join(parts)
+
+
+def _tool_list_for_mode(mode: str, target: Target) -> str:
+    return (
+        "list_files, read_file, write_file, run_grader"
+        + (", fetch_url" if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind") else "")
+        + (
+            ", search_docs, query_docs_filesystem"
+            if mode in ("mcp", "auto-informed") and target.mcp_endpoint
+            else ""
+        )
+    )
+
+
+def _system_prompt(use_case: UseCase, target: Target, mode: str,
+                   llms_txt_content: str | None,
+                   skill_content: str | None = None,
+                   capabilities: Any | None = None) -> str:
+    return _agent_prompt(
+        use_case,
+        target,
+        mode,
+        _tool_list_for_mode(mode, target),
+        llms_txt_content,
+        skill_content,
+        capabilities,
+    )
 
 
 # --- Tool execution --------------------------------------------------------
@@ -601,6 +641,30 @@ def _mcp_tool_names(target: Target) -> tuple[str, str]:
     else:
         slug = target.vendor.lower().replace("-", "_") + "_docs"
     return f"search_{slug}", f"query_docs_filesystem_{slug}"
+
+
+def _claude_mcp_server_args(
+    use_case: UseCase,
+    target: Target,
+    mode: str,
+    work_dir: Path,
+) -> list[str]:
+    grader_cfg = use_case.grader
+    run_script = Path(grader_cfg["run"])
+    if not run_script.is_absolute():
+        project_root = use_case.source_path.parents[2]
+        run_script = project_root / run_script
+    grader_env_extra = {k: str(v) for k, v in grader_cfg.get("env", {}).items()}
+
+    args = [
+        "-m", "docs_eval.mcp_server",
+        "--work-dir", str(work_dir.resolve()),
+        "--grader-script", str(run_script),
+        "--grader-env", json.dumps(grader_env_extra),
+    ]
+    if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind"):
+        args.append("--enable-fetch")
+    return args
 
 
 def _read_docs_mcp(state: _AgentState, query: str) -> dict[str, Any]:
@@ -909,7 +973,7 @@ def _run_loop_openai(
     )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},
-        {"role": "user", "content": use_case.prompt},
+        {"role": "user", "content": "Start the task."},
     ]
 
     total_in = total_out = 0
@@ -1052,6 +1116,7 @@ def _run_loop_claude(
     Returns (turns, total_input_tokens, total_output_tokens).
     """
     import shutil
+    import sys
     import tempfile
     import sys
 
@@ -1060,25 +1125,12 @@ def _run_loop_claude(
             "claude CLI not found in PATH — install Claude Code: https://claude.ai/code"
         )
 
-    # Resolve the grader script path so we can pass it to the MCP server.
-    grader_cfg = use_case.grader
-    run_script = Path(grader_cfg["run"])
-    if not run_script.is_absolute():
-        project_root = use_case.source_path.parents[2]
-        run_script = project_root / run_script
-    grader_env_extra = {k: str(v) for k, v in grader_cfg.get("env", {}).items()}
-
     # Build the MCP server invocation.  We launch it as a stdio subprocess so
     # Claude Code manages the lifecycle; each cell gets its own server instance
     # scoped to that cell's work directory.
-    mcp_server_args = [
-        sys.executable, "-m", "docs_eval.mcp_server",
-        "--work-dir", str(work_dir.resolve()),
-        "--grader-script", str(run_script),
-        "--grader-env", json.dumps(grader_env_extra),
-    ]
-    if mode in ("web", "auto-informed", "auto-blind"):
-        mcp_server_args.append("--enable-fetch")
+    mcp_server_args = [sys.executable] + _claude_mcp_server_args(
+        use_case, target, mode, work_dir
+    )
 
     mcp_config = {
         "mcpServers": {
@@ -1096,15 +1148,19 @@ def _run_loop_claude(
         json.dump(mcp_config, f)
         mcp_config_path = f.name
 
-    # For llms-txt / skill modes, prepend the docs context to the user prompt
-    # since there's no system-prompt flag in `claude -p`.  For web mode, Claude
-    # discovers docs via fetch_url which is exposed as an MCP tool.
-    full_prompt = system + "\n\n---\n\n" + use_case.prompt
+    # Claude -p takes one prompt; the shared agent prompt already includes the
+    # task, docs context/hints, rules, and self-report instructions.
+    full_prompt = system
 
     allowed_mcp = (
         "mcp__docs-eval__list_files,mcp__docs-eval__read_file,"
         "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
-        + (",mcp__docs-eval__fetch_url" if mode in ("web", "auto-informed", "auto-blind") else "")
+        + (",mcp__docs-eval__fetch_url" if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind") else "")
+        + (
+            ",mcp__docs-eval__search_docs,mcp__docs-eval__query_docs_filesystem"
+            if mode in ("mcp", "auto-informed") and target.mcp_endpoint
+            else ""
+        )
     )
     # Block native claude-code tools so the agent is isolated to the MCP sandbox.
     # Critically: block Skill so the agent can't use session skills (e.g. the
@@ -1326,6 +1382,9 @@ def _run_loop_codex(
     system: str,
     cfg: "RunnerConfig",
     work_dir: Path,
+    llms_txt_content: str | None = None,
+    skill_content: str | None = None,
+    capabilities: Any | None = None,
 ) -> tuple[int, int, int]:
     """Run the agent once through `codex exec`.
 
@@ -1353,38 +1412,27 @@ def _run_loop_codex(
     if not codex_model:
         codex_model = "gpt-5.5"
 
-    prompt_parts = [
-        "You are editing a freshly scaffolded app for a docs-eval benchmark.",
-        f"Vendor docs are at: {target.base_url}",
-        "",
-        "Task:",
-        use_case.prompt,
-        "",
-        "Edit scope:",
-        "- Work only inside the current scaffold directory.",
-        "- Prefer the files named in the task prompt.",
-        "- Do not edit benchmark runner files, graders, use_cases, or files outside this app.",
-        "",
-        "Validation contract:",
-        "- The benchmark runner will run the grader after you exit.",
-        "- Do not start dev servers, run Playwright, run the benchmark grader, or run npm build.",
-        "- If you need a quick check, run only TypeScript typecheck once.",
-        "- When the feature is implemented, stop immediately with a short summary and the required JSON self-report.",
-        "",
-        _SELF_REPORT_INSTRUCTION,
-    ]
-    expected_imports = use_case.expected.get("imports") or []
-    expected_calls = use_case.expected.get("calls") or []
-    forbidden = use_case.expected.get("forbidden") or []
-    if expected_imports or expected_calls or forbidden:
-        prompt_parts += ["", "The grader will look for these implementation signals:"]
-        if expected_imports:
-            prompt_parts.append(f"- Required import substrings: {expected_imports}")
-        if expected_calls:
-            prompt_parts.append(f"- Required call substrings: {expected_calls}")
-        if forbidden:
-            prompt_parts.append(f"- Forbidden substrings: {forbidden}")
-    prompt = "\n".join(prompt_parts)
+    prompt = _agent_prompt(
+        use_case,
+        target,
+        mode,
+        _tool_list_for_mode(mode, target),
+        llms_txt_content,
+        skill_content=skill_content,
+        capabilities=capabilities,
+        backend_note=(
+            "Codex-specific validation contract: the benchmark runner will run the grader after you exit. "
+            "Do not start dev servers, run Playwright, run the benchmark grader, or run npm build. "
+            "If you need a quick check, run only TypeScript typecheck once. "
+            "Codex may also use its native file and shell tools when needed, but keep all edits inside the scaffold directory."
+        ),
+    )
+    transcript_base = Path(state.transcript_fp.name).with_suffix("")
+    codex_prompt_path = transcript_base.with_suffix(".codex.prompt.txt")
+    codex_events_path = transcript_base.with_suffix(".codex.jsonl")
+    codex_stderr_path = transcript_base.with_suffix(".codex.stderr.txt")
+    codex_final_path = transcript_base.with_suffix(".codex.final.txt")
+    codex_prompt_path.write_text(prompt, encoding="utf-8")
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, prefix="docs_eval_codex_last_"
@@ -1392,7 +1440,7 @@ def _run_loop_codex(
         last_message_path = f.name
 
     cmd = ["codex"]
-    if mode in ("web", "auto-informed", "auto-blind"):
+    if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind"):
         cmd.append("--search")
     cmd += [
         "exec",
@@ -1401,6 +1449,7 @@ def _run_loop_codex(
         "--ephemeral",
         "--ignore-user-config",
         "--ignore-rules",
+        "--json",
         "--output-last-message", last_message_path,
         "--color", "never",
     ]
@@ -1436,6 +1485,8 @@ def _run_loop_codex(
         codex_returncode = proc.returncode
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
+        codex_events_path.write_text(stdout, encoding="utf-8")
+        codex_stderr_path.write_text(stderr, encoding="utf-8")
         import re
         token_match = re.search(r"tokens used\s+([\d,]+)", stdout + "\n" + stderr)
         if token_match:
@@ -1444,10 +1495,15 @@ def _run_loop_codex(
             final_text = Path(last_message_path).read_text(errors="replace")
         except OSError:
             final_text = ""
+        codex_final_path.write_text(final_text, encoding="utf-8")
         if final_text:
             state.last_assistant_text = final_text
         state.log("codex_cli", {
             "returncode": proc.returncode,
+            "prompt_path": str(codex_prompt_path),
+            "events_path": str(codex_events_path),
+            "stderr_path": str(codex_stderr_path),
+            "final_message_path": str(codex_final_path),
             "stdout_tail": stdout[-4000:],
             "stderr_tail": stderr[-4000:],
             "final_message": final_text[-4000:],
@@ -1462,7 +1518,20 @@ def _run_loop_codex(
         codex_timed_out = True
         stdout = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
         stderr = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        codex_events_path.write_text(stdout, encoding="utf-8")
+        codex_stderr_path.write_text(stderr, encoding="utf-8")
+        try:
+            final_text = Path(last_message_path).read_text(errors="replace")
+        except OSError:
+            final_text = ""
+        codex_final_path.write_text(final_text, encoding="utf-8")
+        if final_text:
+            state.last_assistant_text = final_text
         state.log("codex_cli_timeout", {
+            "prompt_path": str(codex_prompt_path),
+            "events_path": str(codex_events_path),
+            "stderr_path": str(codex_stderr_path),
+            "final_message_path": str(codex_final_path),
             "stdout_tail": stdout[-4000:],
             "stderr_tail": stderr[-4000:],
             "after_seconds": codex_timeout,
@@ -1653,7 +1722,10 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
     try:
         if backend == "codex":
             turns, total_in, total_out = _run_loop_codex(
-                state, use_case, target, mode, system, cfg, work_dir
+                state, use_case, target, mode, system, cfg, work_dir,
+                llms_txt_content=llms_txt_content,
+                skill_content=skill_content,
+                capabilities=discovered_caps if mode == "auto-informed" else None,
             )
         elif backend == "claude":
             turns, total_in, total_out = _run_loop_claude(

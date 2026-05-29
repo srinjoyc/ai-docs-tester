@@ -9,6 +9,8 @@ Kept deliberately thin — orchestration only, no business logic.
 from __future__ import annotations
 
 import sys
+import os
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from rich.progress import (BarColumn, Progress, SpinnerColumn,
                             TaskProgressColumn, TextColumn, TimeElapsedColumn)
 from rich.table import Table
 
+from .ai_judge import review_result
 from .config import CLASSIC_MODES, MODES, load_targets, load_use_cases
 from .reporter import (load_summary_json, render_markdown, render_rich_summary,
                         write_summary_json)
@@ -60,11 +63,21 @@ def main():
 @click.option("--human-review", "human_review", is_flag=True,
               help="After each passing cell, start the app and ask you to confirm "
                    "it works. Requires human_check defined in the use case YAML.")
+@click.option("--ai-review", "ai_review", is_flag=True,
+              help="Run a qualitative AI judge after deterministic grading.")
+@click.option("--review-model", default=None,
+              help="Model for --ai-review. Defaults to the run model unless specified.")
+@click.option("--review-backend", default=None,
+              type=click.Choice(["openai", "codex"]),
+              help="Backend for --ai-review. Defaults to the run backend when supported.")
+@click.option("--review-timeout", type=int, default=120, show_default=True,
+              help="Timeout in seconds for each --ai-review call.")
 @click.option("--dry-run", is_flag=True, help="Print the plan and exit.")
 @click.option("--skip-smoke", is_flag=True,
               help="Skip smoke tests (scaffold/typecheck/mcp checks) before running.")
 def run(use_case_patterns, use_cases_root, target_names, targets_file,
-        modes, runs, out_dir, model, backend, verbose, human_review, dry_run, skip_smoke):
+        modes, runs, out_dir, model, backend, verbose, human_review, ai_review,
+        review_model, review_backend, review_timeout, dry_run, skip_smoke):
     """Execute the eval matrix."""
     uc_root = Path(use_cases_root)
     patterns = list(use_case_patterns) or None
@@ -204,6 +217,17 @@ def run(use_case_patterns, use_cases_root, target_names, targets_file,
                 except Exception as e:
                     console.print(f"  [red]CRASH[/red] {uc.id}/{t.name}/{mode}/r{run_idx}: {e}")
                 prog.advance(task)
+
+    if ai_review and results:
+        review_model = _choose_review_model(review_model, cfg.model)
+        review_backend = _choose_review_backend(review_backend, backend or cfg.backend)
+        console.print(f"\n[bold]AI quality review[/bold] ({review_backend}, {review_model})…")
+        use_cases_by_id = {uc.id: uc for uc in cases}
+        targets_by_name = {t.name: t for t in targets}
+        _run_ai_reviews(
+            results, use_cases_by_id, targets_by_name, out_dir,
+            review_model, review_backend, review_timeout, tolerate_failures=True,
+        )
 
     # Persist
     summary_path = out_dir / "summary.json"
@@ -350,6 +374,144 @@ def report(results_dir, fmt):
         click.echo(render_markdown(results))
     else:
         click.echo(summary.read_text())
+
+
+@main.command()
+@click.argument("results_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--use-cases-root", default="use_cases", show_default=True,
+              type=click.Path(file_okay=False, exists=True))
+@click.option("--targets-file", default="targets/targets.yaml", show_default=True,
+              type=click.Path(dir_okay=False, exists=True))
+@click.option("--review-model", default=None,
+              help="Model for AI review. Defaults to saved run model unless specified.")
+@click.option("--review-backend", default=None,
+              type=click.Choice(["openai", "codex"]),
+              help="Backend for AI review. Defaults to saved run backend when supported.")
+@click.option("--review-timeout", type=int, default=120, show_default=True,
+              help="Timeout in seconds for each review call.")
+def review(results_dir, use_cases_root, targets_file, review_model, review_backend, review_timeout):
+    """Run AI quality review over an existing results directory."""
+    results_dir = Path(results_dir)
+    summary = results_dir / "summary.json"
+    if not summary.exists():
+        console.print(f"[red]No summary.json in {results_dir}[/red]")
+        sys.exit(1)
+
+    results = load_summary_json(summary)
+    case_ids = sorted({r.use_case_id for r in results})
+    target_names = sorted({r.target_name for r in results})
+    cases = load_use_cases(Path(use_cases_root))
+    use_cases_by_id = {uc.id: uc for uc in cases if uc.id in case_ids}
+    targets = load_targets(Path(targets_file), target_names)
+    targets_by_name = {t.name: t for t in targets}
+
+    missing_cases = sorted(set(case_ids) - set(use_cases_by_id))
+    missing_targets = sorted(set(target_names) - set(targets_by_name))
+    if missing_cases or missing_targets:
+        if missing_cases:
+            console.print(f"[red]Missing use cases:[/red] {missing_cases}")
+        if missing_targets:
+            console.print(f"[red]Missing targets:[/red] {missing_targets}")
+        sys.exit(1)
+
+    saved_meta = _read_result_meta(results[0]) if results else {}
+    review_model = _choose_review_model(review_model, saved_meta.get("model"))
+    review_backend = _choose_review_backend(review_backend, saved_meta.get("backend"))
+    console.print(f"[bold]AI quality review[/bold] ({review_backend}, {review_model})")
+    _run_ai_reviews(
+        results, use_cases_by_id, targets_by_name, results_dir,
+        review_model, review_backend, review_timeout, tolerate_failures=False,
+    )
+
+    write_summary_json(results, summary)
+    (results_dir / "report.md").write_text(render_markdown(results))
+    console.print(f"[green]Updated[/green] {summary} and {results_dir / 'report.md'}")
+
+
+def _choose_review_model(explicit: str | None, run_model: str | None = None) -> str:
+    return explicit or os.environ.get("DOCS_EVAL_REVIEW_MODEL") or run_model or RunnerConfig.model
+
+
+def _choose_review_backend(explicit: str | None, run_backend: str | None = None) -> str:
+    if explicit:
+        return explicit
+    env_backend = os.environ.get("DOCS_EVAL_REVIEW_BACKEND")
+    if env_backend in {"openai", "codex"}:
+        return env_backend
+    if run_backend in {"openai", "codex"}:
+        return run_backend
+    return _default_review_backend()
+
+
+def _default_review_backend() -> str:
+    if os.environ.get("CHAT_GPT_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    return "codex"
+
+
+def _read_result_meta(result) -> dict:
+    try:
+        with result.transcript_path.open() as fp:
+            for line in fp:
+                event = json.loads(line)
+                if event.get("kind") == "meta":
+                    return event.get("data") or {}
+    except Exception:
+        return {}
+    return {}
+
+
+def _run_ai_reviews(results, use_cases_by_id, targets_by_name, out_dir,
+                    review_model, review_backend, review_timeout,
+                    tolerate_failures: bool) -> None:
+    for result in results:
+        try:
+            review_obj = review_result(
+                result,
+                use_cases_by_id[result.use_case_id],
+                targets_by_name[result.target_name],
+                out_dir,
+                review_model,
+                timeout_seconds=review_timeout,
+                backend=review_backend,
+            )
+            _print_review_result(result, review_obj)
+        except Exception as e:
+            if not tolerate_failures:
+                raise
+            result.ai_review = _failed_review(result, e)
+            console.print(
+                f"  [red]review failed[/red] {result.use_case_id} / "
+                f"{result.target_name} / {result.mode} / r{result.run_idx}: {e}"
+            )
+
+
+def _print_review_result(result, review_obj: dict) -> None:
+    score = review_obj.get("overall_score", "—")
+    verdict = review_obj.get("verdict", "—")
+    likely = "likely real-world" if review_obj.get("would_likely_work_real_world") else "real-world uncertain"
+    console.print(
+        f"  [cyan]review[/cyan] {result.use_case_id} / {result.target_name} / "
+        f"{result.mode} / r{result.run_idx}: {score}/100 {verdict} ({likely})"
+    )
+
+
+def _failed_review(result, error: Exception) -> dict:
+    return {
+        "overall_score": 0,
+        "verdict": "review_failed",
+        "passed_grader": result.passed,
+        "would_likely_work_real_world": False,
+        "scores": {},
+        "strengths": [],
+        "issues": [{
+            "severity": "major",
+            "category": "ai_review",
+            "evidence": f"AI review failed: {error}",
+            "recommendation": "Check credentials/model availability and rerun the review.",
+        }],
+        "confidence": 0,
+    }
 
 
 if __name__ == "__main__":
