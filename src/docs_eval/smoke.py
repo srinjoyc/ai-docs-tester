@@ -208,11 +208,25 @@ def _smoke_one(
         if check_grader:
             sol_dir = _solution_dir(uc, project_root)
             if sol_dir:
+                has_pkg = (sol_dir / "package.json").exists()
                 for src in sol_dir.rglob("*"):
                     if src.is_file():
                         dst = work_dir / src.relative_to(sol_dir)
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(src, dst)
+                # If solution ships its own package.json (e.g. adding vendor deps
+                # that the clean scaffold doesn't pre-install), remove the cached
+                # node_modules symlink and run a fresh npm install so tsc can find them.
+                if has_pkg:
+                    nm = work_dir / "node_modules"
+                    if nm.is_symlink():
+                        nm.unlink()
+                    if verbose:
+                        print(f"    npm       installing solution deps…", flush=True)
+                    subprocess.run(
+                        ["npm", "install", "--silent", "--no-audit", "--no-fund", "--legacy-peer-deps"],
+                        cwd=work_dir, capture_output=not verbose, timeout=300,
+                    )
                 env = os.environ.copy()
                 env.update(grader_env_extra)
                 print(f"    grader    running…", flush=True)
