@@ -20,6 +20,9 @@ def _normalize(name: str) -> str:
 
 
 def _public_defaults(env: dict[str, str]) -> dict[str, str]:
+    # The project id is primarily a convenience for deriving ZeroDev RPC URLs.
+    # For normal bundler/paymaster transports, full project-scoped URLs are
+    # sufficient and already contain the project context.
     project_id = (
         env.get("DOCS_EVAL_ZERODEV_PROJECT_ID")
         or env.get("ZERODEV_PROJECT_ID")
