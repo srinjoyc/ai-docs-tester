@@ -210,6 +210,20 @@ Set booleans based on what you actually used. List every doc URL you fetched in 
 --- END SELF-REPORT INSTRUCTION ---"""
 
 
+def _resource_type_from_url(url: str) -> str:
+    """Best-effort resource type for agent-reported documentation URLs."""
+    lower = url.lower()
+    if "llms-full.txt" in lower:
+        return "llms-full.txt"
+    if "llms.txt" in lower:
+        return "llms.txt"
+    if "skill.md" in lower:
+        return "skill.md"
+    if lower.endswith((".md", ".mdx")):
+        return "markdown"
+    return "docs"
+
+
 def _system_prompt(use_case: UseCase, target: Target, mode: str,
                    llms_txt_content: str | None,
                    skill_content: str | None = None,
@@ -1347,7 +1361,9 @@ def _run_loop_codex(
         "- The benchmark runner will run the grader after you exit.",
         "- Do not start dev servers, run Playwright, run the benchmark grader, or run npm build.",
         "- If you need a quick check, run only TypeScript typecheck once.",
-        "- When the feature is implemented, stop immediately with a short summary.",
+        "- When the feature is implemented, stop immediately with a short summary and the required JSON self-report.",
+        "",
+        _SELF_REPORT_INSTRUCTION,
     ]
     expected_imports = use_case.expected.get("imports") or []
     expected_calls = use_case.expected.get("calls") or []
@@ -1649,16 +1665,30 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
             state.last_human_review = {"passed": hr_passed, "notes": hr_notes}
             state.log("human_review", state.last_human_review)
     finally:
-        # Extract self-report from agent's last text message (auto modes only).
+        # Extract self-report from agent's last text message.
         self_report: dict[str, Any] | None = None
         mismatches: list[str] = []
-        if mode in ("auto-informed", "auto-blind") and state.last_assistant_text:
+        if state.last_assistant_text:
             self_report = _extract_self_report(state.last_assistant_text)
             if self_report:
-                mismatches = _detect_mismatches(state, self_report)
+                if state.doc_resource_inventory:
+                    mismatches = _detect_mismatches(state, self_report)
                 state.log("self_report", {"report": self_report, "mismatches": mismatches})
 
         doc_resources = list(state.doc_resource_inventory.values())
+        if self_report and not doc_resources:
+            reported_urls = self_report.get("resource_urls") or []
+            if isinstance(reported_urls, list):
+                doc_resources = [
+                    {
+                        "url": str(url),
+                        "resource_type": _resource_type_from_url(str(url)),
+                        "access_method": "agent_self_report",
+                        "times_accessed": 1,
+                    }
+                    for url in reported_urls
+                    if url
+                ]
 
         state.log("summary", {
             "turns": turns,
