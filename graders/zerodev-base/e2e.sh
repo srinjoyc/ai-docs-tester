@@ -15,7 +15,7 @@
 #   WORK_DIR              — absolute path to the agent's code dir (set below)
 #   PLAYWRIGHT_PORT       — free TCP port to run the dev server on
 #   REQUIRE_GAS_SPONSORED — "true" to assert "gas sponsored" text in the UI
-#   TEST_WALLET_PRIVATE_KEY, ZERODEV_PROJECT_ID, BUNDLER_URL, PAYMASTER_URL
+#   TEST_WALLET_PRIVATE_KEY, ZERODEV_PROJECT_ID, BUNDLER_URL, PAYMASTER_URL, RPC_URL
 set -euo pipefail
 
 WORK_DIR="$(cd "$1" && pwd)"
