@@ -322,10 +322,10 @@ def render_markdown(results: list[RunResult]) -> str:
             )
         lines.append("")
 
-    # ---- Self-report summary (auto modes) ----
+    # ---- Self-report summary ----
     self_reported = [r for r in results if r.agent_self_report is not None]
     if self_reported:
-        lines.append("## Agent self-reports (auto modes)")
+        lines.append("## Agent self-reports")
         lines.append("")
         lines.append("| target | mode | run | most_useful | used_prior_knowledge | mismatches |")
         lines.append("|---|---|---|---|---|---|")
@@ -351,6 +351,26 @@ def render_markdown(results: list[RunResult]) -> str:
                 lines.append(f"**{r.use_case_id} / {r.target_name} / {r.mode} / r{r.run_idx}**")
                 for m in r.self_report_mismatches:
                     lines.append(f"- {m}")
+            lines.append("")
+        lines.append("### Agent solution notes")
+        lines.append("")
+        for r in sorted(self_reported, key=lambda r: (r.target_name, r.mode, r.run_idx)):
+            sr = r.agent_self_report or {}
+            lines.append(f"**{r.use_case_id} / {r.target_name} / {r.mode} / r{r.run_idx}**")
+            if sr.get("approach_summary"):
+                lines.append(f"- Approach: {sr['approach_summary']}")
+            for label, key in (
+                ("Steps", "steps_taken"),
+                ("Challenges", "challenges_faced"),
+                ("How overcome", "how_challenges_were_overcome"),
+                ("Key APIs", "key_apis_used"),
+            ):
+                values = sr.get(key) or []
+                if values:
+                    if isinstance(values, list):
+                        lines.append(f"- {label}: " + "; ".join(str(v) for v in values))
+                    else:
+                        lines.append(f"- {label}: {values}")
             lines.append("")
 
     # ---- Human review summary (only shown if any results have it) ----

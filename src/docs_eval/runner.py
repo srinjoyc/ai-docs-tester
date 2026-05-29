@@ -201,12 +201,19 @@ After your final action, output a JSON block exactly like this (no other text ar
   "used_regular_docs": false,
   "used_prior_knowledge": false,
   "most_useful_resource": null,
+  "approach_summary": "",
+  "steps_taken": [],
+  "challenges_faced": [],
+  "how_challenges_were_overcome": [],
+  "key_apis_used": [],
   "missing_information": [],
   "difficult_information": [],
   "resource_urls": []
 }
 ```
 Set booleans based on what you actually used. List every doc URL you fetched in resource_urls.
+Use approach_summary, steps_taken, challenges_faced, how_challenges_were_overcome,
+and key_apis_used to explain how you solved the task.
 --- END SELF-REPORT INSTRUCTION ---"""
 
 
@@ -315,9 +322,10 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             "Use create_inbox to get a real @agentmail.to address for any signup or OTP flow.",
         ]
 
-    # Self-report requested for auto modes (observability benchmark)
-    if mode in ("auto-informed", "auto-blind"):
-        parts.append(_SELF_REPORT_INSTRUCTION)
+    # Ask every backend/mode for the same final resource-use report. For Claude
+    # and OpenAI this rides in the normal system prompt; Codex gets it in its
+    # custom CLI prompt below.
+    parts.append(_SELF_REPORT_INSTRUCTION)
 
     return "\n".join(parts)
 
@@ -1676,19 +1684,20 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
                 state.log("self_report", {"report": self_report, "mismatches": mismatches})
 
         doc_resources = list(state.doc_resource_inventory.values())
-        if self_report and not doc_resources:
+        if self_report:
             reported_urls = self_report.get("resource_urls") or []
             if isinstance(reported_urls, list):
-                doc_resources = [
-                    {
-                        "url": str(url),
-                        "resource_type": _resource_type_from_url(str(url)),
-                        "access_method": "agent_self_report",
-                        "times_accessed": 1,
-                    }
-                    for url in reported_urls
-                    if url
-                ]
+                known_urls = {r.get("url") for r in doc_resources}
+                for url in reported_urls:
+                    url = str(url)
+                    if url and url not in known_urls:
+                        doc_resources.append({
+                            "url": url,
+                            "resource_type": _resource_type_from_url(url),
+                            "access_method": "agent_self_report",
+                            "times_accessed": 1,
+                        })
+                        known_urls.add(url)
 
         state.log("summary", {
             "turns": turns,
