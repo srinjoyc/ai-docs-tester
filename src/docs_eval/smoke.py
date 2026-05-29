@@ -162,7 +162,13 @@ def _smoke_one(
     grader_script = _resolve_path(uc.grader["run"], project_root)
     grader_env_extra = {k: str(v) for k, v in uc.grader.get("env", {}).items()}
 
-    with tempfile.TemporaryDirectory(prefix="docs-eval-smoke-") as tmp:
+    # Use a directory OUTSIDE the project root AND outside /tmp.
+    # - /tmp is a macOS symlink to /private/tmp, which causes Node.js to find
+    #   two copies of React (via symlink vs real path), breaking SSR hooks.
+    # - Inside the project root, Next.js picks up parent project config.
+    smoke_root = Path.home() / ".cache" / "docs-eval-smoke"
+    smoke_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f"{uc.id}-", dir=smoke_root) as tmp:
         work_dir = Path(tmp)
 
         # ── 1. Scaffold ────────────────────────────────────────────────────
@@ -211,7 +217,7 @@ def _smoke_one(
                 env.update(grader_env_extra)
                 print(f"    grader    running…", flush=True)
                 tail: list[str] = []
-                IDLE_TIMEOUT = 45   # kill if no output for this many seconds
+                IDLE_TIMEOUT = 90   # generous to handle real-mode network waits
                 try:
                     proc = subprocess.Popen(
                         ["bash", str(grader_script), str(work_dir)],
@@ -242,7 +248,11 @@ def _smoke_one(
                         if verbose:
                             print(f"      {line}", flush=True)
 
-                    proc.wait(timeout=10)
+                    try:
+                        proc.wait(timeout=30)  # allow time for Next.js cleanup
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
                     grader_ok = proc.returncode == 0
                     if killed_reason:
                         grader_ok = False

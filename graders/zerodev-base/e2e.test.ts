@@ -189,9 +189,11 @@ async function setupMockNetwork(page: Page) {
         return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x" } });
 
       case "eth_call":
-        // Kernel factory's getAddress / any view call — return 32 zero bytes.
-        // The SDK recomputes the counterfactual address client-side anyway.
-        return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x" + "00".repeat(32) } });
+        // ABI-encoded address (32 bytes): 12 zero bytes + 20-byte fake kernel address.
+        // Must be non-zero — the SDK validates the factory response and rejects 0x0.
+        return route.fulfill({
+          json: { jsonrpc: "2.0", id, result: "0x000000000000000000000000" + FAKE_PAYMASTER.slice(2) },
+        });
 
       case "eth_getTransactionReceipt":
         return route.fulfill({ json: { jsonrpc: "2.0", id, result: null } });
