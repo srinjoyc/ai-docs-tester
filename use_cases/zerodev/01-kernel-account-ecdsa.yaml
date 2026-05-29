@@ -35,8 +35,8 @@ grader:
   run: ./graders/zerodev-base/e2e.sh
 
 budget:
-  max_turns: 10
-  max_seconds: 300
+  max_turns: 15
+  max_seconds: 450
 
 human_check:
   start_command: "npm run dev"
