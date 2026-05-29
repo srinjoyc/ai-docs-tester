@@ -1043,7 +1043,7 @@ def _run_loop_claude(
     run_script = Path(grader_cfg["run"])
     if not run_script.is_absolute():
         project_root = use_case.source_path.parents[2]
-        run_script = project_root / run_script
+        run_script = (project_root / run_script).resolve()  # must be absolute: subprocess runs from HOME
     grader_env_extra = {k: str(v) for k, v in grader_cfg.get("env", {}).items()}
 
     # Build the MCP server invocation.  We launch it as a stdio subprocess so
