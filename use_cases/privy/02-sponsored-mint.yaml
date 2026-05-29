@@ -28,9 +28,11 @@ expected:
     - "useWallets"
   chain: sepolia
 
+scaffold:
+  setup: ./scaffolds/privy-base/setup.sh
+
 grader:
   type: compile
-  setup: ./graders/privy-base/setup.sh
   run: ./graders/privy-base/typecheck.sh
 
 budget:

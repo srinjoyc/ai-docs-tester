@@ -254,16 +254,12 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
     elif mode == "web":
         parts += [
             "",
-            f"You have fetch_url available. Docs live at: {target.base_url}",
-            "Fetch at most 2 doc pages, then write and test your code. "
-            "Do not keep fetching — call write_file and run_grader.",
+            f"Docs live at: {target.base_url}",
         ]
     elif mode == "mcp":
         parts += [
             "",
-            f"You have search_docs and query_docs_filesystem to look up {target.vendor} docs. "
-            "Use at most 3 doc lookups total, then write the code and run the grader. "
-            "Do not keep querying — write_file and run_grader are the goal.",
+            f"You have search_docs and query_docs_filesystem to look up {target.vendor} docs.",
         ]
     elif mode == "skill" and skill_content:
         parts += [
@@ -273,20 +269,28 @@ def _system_prompt(use_case: UseCase, target: Target, mode: str,
             f"--- END {target.vendor.upper()} SKILL REFERENCE ---",
         ]
     elif mode == "auto-informed" and capabilities is not None:
-        parts += [
-            "",
-            capabilities.agent_summary(),
-            "",
-            f"You have fetch_url available (and MCP search tools if listed above). "
-            f"Use whichever resources you find most useful. "
-            "Fetch at most 3 doc resources, then write and test your code.",
-        ]
+        # Natural hint: just mention what's available, like a colleague would
+        llms_url = next(
+            (r.url for r in capabilities.resources
+             if r.resource_type in ("llms-full.txt", "llms.txt")),
+            None,
+        )
+        hints = [f"Docs live at: {target.base_url}."]
+        if llms_url:
+            hints.append(f"An llms.txt is also available at {llms_url}.")
+        skill_url = next(
+            (r.url for r in capabilities.resources if r.resource_type == "skill.md"),
+            None,
+        )
+        if skill_url:
+            hints.append(f"A skill.md reference is available at {skill_url}.")
+        if capabilities.has_mcp and capabilities.mcp_url:
+            hints.append(f"An MCP endpoint is available at {capabilities.mcp_url}.")
+        parts += ["", " ".join(hints)]
     elif mode == "auto-blind":
         parts += [
             "",
-            f"You have fetch_url available. The docs base URL is: {target.base_url}",
-            "Explore the site as needed to find documentation. "
-            "Fetch at most 3 doc resources, then write and test your code.",
+            f"Docs live at: {target.base_url}",
         ]
 
     if os.environ.get("AGENTMAIL_API_KEY"):
@@ -664,9 +668,13 @@ def _handle_tool(state: _AgentState, name: str, args: dict[str, Any]) -> dict[st
 def _summarize_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     """One-line summary of a tool result for the transcript (keeps logs scannable)."""
     if tool_name == "list_files":
-        return f"{result.get('count', 0)} files"
+        # mcp_server returns {"files": [...]}
+        files = result.get("files", [])
+        return f"{len(files)} files"
     if tool_name == "read_file":
-        return f"{result.get('bytes', 0)} bytes — {result.get('path', '')}"
+        # mcp_server returns raw text (not JSON), so result here is {"raw": text[:200]}
+        raw = result.get("raw", "")
+        return f"{len(raw)} chars — {result.get('path', '')}"
     if tool_name == "write_file":
         return f"{result.get('bytes', 0)} bytes written — {result.get('path', '')}"
     if tool_name == "run_grader":
@@ -1042,7 +1050,7 @@ def _run_loop_claude(
     # scoped to that cell's work directory.
     mcp_server_args = [
         sys.executable, "-m", "docs_eval.mcp_server",
-        "--work-dir", str(work_dir),
+        "--work-dir", str(work_dir.resolve()),
         "--grader-script", str(run_script),
         "--grader-env", json.dumps(grader_env_extra),
     ]
@@ -1075,13 +1083,17 @@ def _run_loop_claude(
         "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
         + (",mcp__docs-eval__fetch_url" if mode in ("web", "auto-informed", "auto-blind") else "")
     )
+    # Block native claude-code file tools so the agent can't bypass the MCP sandbox
+    # by reading project memory, CLAUDE.md, or arbitrary filesystem paths.
+    _native_blocked = "Read,Write,Edit,MultiEdit,Bash,Glob,Grep,LS,TodoRead,TodoWrite,NotebookRead,NotebookEdit"
     cmd = [
         "claude", "-p", full_prompt,
         "--mcp-config", mcp_config_path,
         "--output-format", "stream-json",
-        "--max-turns", str(use_case.max_turns),
+        "--max-turns", str(use_case.max_turns + 3),  # +3 absorbs ToolSearch internal overhead
         "--model", cfg.model,
         "--allowedTools", allowed_mcp,
+        "--disallowedTools", _native_blocked,
         "--verbose",  # required by claude CLI when using --output-format stream-json
     ]
 
@@ -1195,8 +1207,16 @@ def _run_loop_claude(
                     print(f"  [agent] turn {turns}/{use_case.max_turns} "
                           f"({elapsed:.0f}s elapsed, "
                           f"{total_in:,}in/{total_out:,}out tokens so far)")
-                    if short_names:
-                        print(f"  [agent]   tools: {short_names}")
+                    if text_block:
+                        # Show first line of agent reasoning so we can follow its thinking
+                        first_line = text_block.strip().splitlines()[0][:120]
+                        print(f"  [agent]   → {first_line}")
+                    for tu in tool_uses:
+                        short = tu.get("name", "").replace("mcp__docs-eval__", "")
+                        inp = tu.get("input", {})
+                        arg = inp.get("path") or inp.get("url") or ""
+                        suffix = f" {arg}" if arg else ""
+                        print(f"  [agent]   {short}{suffix}")
 
         elif etype == "user":
             # Tool results fed back as user messages.
@@ -1278,9 +1298,9 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
 
     # ── Step 1: scaffold the starter app ─────────────────────────────────────
     if cfg.verbose:
-        print(f"  [setup] scaffolding starter app in {work_dir}")
+        print(f"  [scaffold] creating starter app in {work_dir}")
     setup_start = time.time()
-    setup_script = Path(use_case.grader["setup"])
+    setup_script = Path(use_case.scaffold["setup"])
     if not setup_script.is_absolute():
         project_root = use_case.source_path.parents[2]
         setup_script = project_root / setup_script
@@ -1302,7 +1322,7 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
             transcript_path=transcript_path, code_dir=work_dir,
         )
     if cfg.verbose:
-        print(f"  [setup] done in {setup_elapsed:.1f}s")
+        print(f"  [scaffold] done in {setup_elapsed:.1f}s")
 
     # ── Step 2: fetch docs context for llms-txt mode ──────────────────────────
     llms_txt_content = None

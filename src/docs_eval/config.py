@@ -21,6 +21,7 @@ class UseCase:
     tags: list[str]
     prompt: str
     expected: dict[str, Any]
+    scaffold: dict[str, Any]
     grader: dict[str, Any]
     budget: dict[str, Any]
     source_path: Path
@@ -70,7 +71,7 @@ MODES = CLASSIC_MODES + AUTO_MODES
 def load_use_case(path: Path) -> UseCase:
     with path.open() as f:
         data = yaml.safe_load(f)
-    required = ("id", "vendor", "title", "prompt", "expected", "grader", "budget")
+    required = ("id", "vendor", "title", "prompt", "expected", "scaffold", "grader", "budget")
     missing = [k for k in required if k not in data]
     if missing:
         raise ValueError(f"{path}: missing required fields: {missing}")
@@ -82,6 +83,7 @@ def load_use_case(path: Path) -> UseCase:
         tags=list(data.get("tags", [])),
         prompt=data["prompt"],
         expected=data["expected"],
+        scaffold=data["scaffold"],
         grader=data["grader"],
         budget=data["budget"],
         source_path=path,

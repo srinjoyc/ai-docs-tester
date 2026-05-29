@@ -34,9 +34,11 @@ expected:
     - "ethers"
   chain: optimism-sepolia
 
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
+
 grader:
   type: compile
-  setup: ./graders/zerodev-base/setup.sh
   run: ./graders/zerodev-base/typecheck.sh
 
 budget:

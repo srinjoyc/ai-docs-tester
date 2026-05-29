@@ -24,6 +24,7 @@ from .config import CLASSIC_MODES, MODES, load_targets, load_use_cases
 from .reporter import (load_summary_json, render_markdown, render_rich_summary,
                         write_summary_json)
 from .runner import RunnerConfig, run_cell
+from .smoke import run_smoke
 
 console = Console()
 
@@ -57,8 +58,10 @@ def main():
               help="After each passing cell, start the app and ask you to confirm "
                    "it works. Requires human_check defined in the use case YAML.")
 @click.option("--dry-run", is_flag=True, help="Print the plan and exit.")
+@click.option("--skip-smoke", is_flag=True,
+              help="Skip smoke tests (scaffold/typecheck/mcp checks) before running.")
 def run(use_case_patterns, use_cases_root, target_names, targets_file,
-        modes, runs, out_dir, model, verbose, human_review, dry_run):
+        modes, runs, out_dir, model, verbose, human_review, dry_run, skip_smoke):
     """Execute the eval matrix."""
     uc_root = Path(use_cases_root)
     patterns = list(use_case_patterns) or None
@@ -112,6 +115,23 @@ def run(use_case_patterns, use_cases_root, target_names, targets_file,
 
     if dry_run:
         return
+
+    # ── Smoke tests: fast infra checks before spending any LLM tokens ─────────
+    if not skip_smoke:
+        unique_cases = list({uc.id: uc for uc, _, _, _ in plan}.values())
+        project_root = Path(use_cases_root).parent.resolve()
+        console.print(f"\n[bold]Smoke tests[/bold] ({len(unique_cases)} use case(s))…")
+        smoke_results = run_smoke(unique_cases, project_root, verbose=verbose, check_grader=False)
+        failures = [r for r in smoke_results if not r.passed]
+        for r in smoke_results:
+            icon = "[green]✓[/green]" if r.passed else "[red]✗[/red]"
+            console.print(f"  {icon} {r.use_case_id}  {r.summary_line()}")
+        if failures:
+            console.print(f"\n[red bold]{len(failures)} smoke test(s) failed — fix infra before running LLM cells.[/red bold]")
+            for r in failures:
+                console.print(f"  [red]{r.use_case_id}:[/red] {r.first_error()[:200]}")
+            sys.exit(1)
+        console.print("[green]All smoke tests passed.[/green]\n")
 
     if out_dir is None:
         out_dir = Path("results") / datetime.now().strftime("%Y%m%d-%H%M")
@@ -191,6 +211,123 @@ def run(use_case_patterns, use_cases_root, target_names, targets_file,
     render_rich_summary(results, console)
     console.print(f"\n[bold]Saved to:[/bold] {out_dir}")
     console.print(f"  [dim]report.md · summary.json · transcripts/ · code/[/dim]")
+
+
+@main.command()
+@click.option("--use-cases", "use_case_patterns", multiple=True,
+              help="Glob(s) under use_cases/. Defaults to all.")
+@click.option("--use-cases-root", default="use_cases", show_default=True,
+              type=click.Path(file_okay=False, exists=True))
+@click.option("--no-grader", is_flag=True,
+              help="Skip the grader check (even if a reference solution exists).")
+@click.option("--verbose", is_flag=True)
+def smoke(use_case_patterns, use_cases_root, no_grader, verbose):
+    """Run scaffold/typecheck/mcp/grader smoke tests without any LLM calls."""
+    uc_root = Path(use_cases_root)
+    patterns = list(use_case_patterns) or None
+    cases = load_use_cases(uc_root, patterns)
+    if not cases:
+        console.print("[red]No use cases matched.[/red]")
+        sys.exit(1)
+
+    project_root = uc_root.parent.resolve()
+    console.print(f"[bold]Smoke tests[/bold] — {len(cases)} use case(s), "
+                  f"grader={'off' if no_grader else 'on (if solution exists)'}")
+
+    from rich.table import Table
+    results = run_smoke(cases, project_root, verbose=verbose, check_grader=not no_grader)
+
+    table = Table(show_lines=False)
+    table.add_column("use case")
+    table.add_column("scaffold", justify="center")
+    table.add_column("typecheck", justify="center")
+    table.add_column("mcp", justify="center")
+    table.add_column("grader", justify="center")
+
+    def cell(v: bool | None) -> str:
+        if v is True:
+            return "[green]✓[/green]"
+        if v is False:
+            return "[red]✗[/red]"
+        return "[dim]—[/dim]"
+
+    for r in results:
+        table.add_row(r.use_case_id,
+                      cell(r.scaffold_ok),
+                      cell(r.typecheck_ok),
+                      cell(r.mcp_ok),
+                      cell(r.grader_ok))
+
+    console.print(table)
+
+    failures = [r for r in results if not r.passed]
+    if failures:
+        console.print(f"\n[red bold]{len(failures)} failure(s):[/red bold]")
+        for r in failures:
+            console.print(f"  [red]{r.use_case_id}:[/red] {r.first_error()[:300]}")
+        sys.exit(1)
+    else:
+        console.print(f"[green]All {len(results)} smoke tests passed.[/green]")
+
+
+@main.command()
+@click.argument("results_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--cell", default=None, help="Filter to one cell (partial match on filename).")
+def show(results_dir, cell):
+    """Print a readable transcript from a results directory."""
+    import json as _json
+    transcript_dir = Path(results_dir) / "transcripts"
+    if not transcript_dir.exists():
+        console.print(f"[red]No transcripts/ in {results_dir}[/red]")
+        sys.exit(1)
+
+    files = sorted(transcript_dir.glob("*.jsonl"))
+    if cell:
+        files = [f for f in files if cell in f.name]
+    if not files:
+        console.print("[red]No matching transcripts.[/red]")
+        sys.exit(1)
+
+    for path in files:
+        console.print(f"\n[bold cyan]── {path.stem} ──[/bold cyan]")
+        for line in path.open():
+            e = _json.loads(line)
+            kind = e.get("kind", "")
+            data = e.get("data", {})
+            if kind == "meta":
+                console.print(f"  use_case={data.get('use_case')}  target={data.get('target')}  mode={data.get('mode')}")
+            elif kind == "assistant":
+                turn = data.get("turn", "?")
+                text = (data.get("content") or "").strip()
+                calls = data.get("tool_calls") or []
+                if text:
+                    console.print(f"\n  [bold]turn {turn}[/bold]  {text[:200]}")
+                for tc in calls:
+                    name = tc.get("name", "").replace("mcp__docs-eval__", "")
+                    try:
+                        args = _json.loads(tc.get("arguments", "{}"))
+                    except Exception:
+                        args = {}
+                    arg = args.get("path") or args.get("url") or ""
+                    console.print(f"  [blue]  → {name}[/blue] {arg}")
+            elif kind == "tool_result":
+                tool = data.get("tool", "")
+                summary = data.get("result_summary", "")
+                if tool == "run_grader":
+                    color = "green" if summary == "pass" else "red"
+                    console.print(f"  [{color}]  ← grader: {summary}[/{color}]")
+                elif tool in ("fetch_url",):
+                    console.print(f"  [dim]  ← {tool}: {str(summary)[:80]}[/dim]")
+            elif kind == "resource_access":
+                url = data.get("url", "")
+                rtype = data.get("resource_type", "")
+                console.print(f"  [yellow]  [source] {rtype}: {url}[/yellow]")
+            elif kind == "summary":
+                passed = data.get("passed")
+                turns = data.get("turns")
+                grader_calls = data.get("grader_calls", 0)
+                icon = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
+                console.print(f"\n  {icon}  {turns} turns  {grader_calls} grader calls")
 
 
 @main.command()

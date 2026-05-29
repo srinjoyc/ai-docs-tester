@@ -19,16 +19,25 @@ Documentation platforms increasingly publish AI-optimized endpoints — `/llms.t
 
 ---
 
-## How It Works
+## Architecture
 
 ```
-1. SCAFFOLD  →  2. PROMPT  →  3. AGENT LOOP  →  4. GRADE & REPORT
+Use Case
+   ↓
+Scaffold
+   ↓
+Agent
+   ↓
+Grader
+   ↓
+Report
 ```
 
-1. **Scaffold** — A fresh Next.js + RainbowKit + wagmi starter app is created in an isolated work directory. The agent sees a real, working codebase — not a blank file.
-2. **Prompt** — The agent is told to add a feature to the existing app. Base scenario: replace the wallet connection with an embedded wallet and send an NFT mint as a transaction or UserOperation.
-3. **Agent loop** — The model runs in a tool-use loop (`list_files`, `read_file`, `write_file`, `run_grader`). Doc access depends on the mode being tested.
-4. **Grade** — The grader runs `tsc --noEmit` and checks that required SDK functions appear in the output. Both must pass.
+1. **Use Case** — A YAML file defines the task prompt, expected imports/calls, scaffold setup script, grader run script, and budget.
+2. **Scaffold** — A fresh starter app is created in an isolated work directory before the agent runs. The agent sees a real, working codebase, not a blank file.
+3. **Agent** — The model runs in a tool-use loop (`list_files`, `read_file`, `write_file`, `run_grader`). Doc access depends on the mode being tested.
+4. **Grader** — The grader runs typecheck and/or E2E validation, then the runner checks required SDK imports and calls.
+5. **Report** — Results, transcripts, code snapshots, and aggregate markdown reports are written under `results/`.
 
 ### Doc Delivery Modes
 
@@ -210,9 +219,12 @@ docs-eval/
     SCHEMA.md       # YAML schema reference
     zerodev/        # ZeroDev use case definitions
     privy/          # Privy use case definitions
+  scaffolds/
+    zerodev-base/   # starter app setup scripts
+    privy-base/     # starter app setup scripts
   graders/
-    zerodev-base/   # scaffold + typecheck scripts
-    privy-base/     # scaffold + typecheck scripts
+    zerodev-base/   # typecheck and E2E validation scripts
+    privy-base/     # typecheck validation scripts
   results/
     archived/       # GPT-4o runs (not viable without human intervention)
   targets/

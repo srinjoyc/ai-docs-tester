@@ -36,9 +36,11 @@ expected:
     - "ethers"
   chain: arbitrumSepolia
 
+scaffold:
+  setup: ./scaffolds/zerodev-base/setup.sh
+
 grader:
   type: e2e
-  setup: ./graders/zerodev-base/setup.sh
   run: ./graders/zerodev-base/e2e.sh
   env:
     GRADER_SCENARIO: "spend-limit"

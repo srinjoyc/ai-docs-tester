@@ -40,9 +40,11 @@ expected:
     - "ethers"
   chain: arbitrumSepolia
 
+scaffold:
+  setup: ./scaffolds/privy-zerodev-base/setup.sh
+
 grader:
   type: compile
-  setup: ./graders/privy-zerodev-base/setup.sh
   run: ./graders/privy-zerodev-base/typecheck.sh
 
 budget:
