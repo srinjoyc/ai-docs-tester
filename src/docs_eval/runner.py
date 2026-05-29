@@ -33,6 +33,8 @@ from typing import Any
 import httpx
 from openai import OpenAI
 
+from .user_inputs import provide_user_input
+
 def _is_claude_model(model: str) -> bool:
     return model.startswith("claude")
 
@@ -89,6 +91,7 @@ class RunResult:
     # Agent self-report (auto modes only) and mismatch analysis
     agent_self_report: dict | None = None
     self_report_mismatches: list = field(default_factory=list)
+    requested_user_inputs: list = field(default_factory=list)
     # Optional qualitative AI review, produced after deterministic grading.
     ai_review: dict | None = None
     ai_review_path: Path | None = None
@@ -210,6 +213,7 @@ After your final action, output a JSON block exactly like this (no other text ar
   "how_challenges_were_overcome": [],
   "key_apis_used": [],
   "missing_information": [],
+  "requested_user_inputs": [],
   "difficult_information": [],
   "resource_urls": []
 }
@@ -218,6 +222,21 @@ Set booleans based on what you actually used. List every doc URL you fetched in 
 Use approach_summary, steps_taken, challenges_faced, how_challenges_were_overcome,
 and key_apis_used to explain how you solved the task.
 --- END SELF-REPORT INSTRUCTION ---"""
+
+_USER_INPUT_INSTRUCTION = """
+--- USER INPUT REQUESTS ---
+If you cannot complete the task without user/project/vendor configuration, stop before
+implementing fake values and output a JSON block like this:
+```json
+{
+  "needs_user_input": [
+    {"name": "BUNDLER_URL", "why_needed": "ZeroDev bundler RPC URL for this project"},
+    {"name": "PAYMASTER_URL", "why_needed": "ZeroDev paymaster RPC URL with sponsorship policy"}
+  ]
+}
+```
+The benchmark runner will reply as the user if the request is specific enough.
+--- END USER INPUT REQUESTS ---"""
 
 
 def _resource_type_from_url(url: str) -> str:
@@ -282,7 +301,7 @@ def _agent_prompt(
         "- Treat the target docs location as authoritative for this run.",
         "- Write TypeScript with proper types — no `any`, no missing imports.",
         "- Read config/env from existing files; don't hardcode secrets.",
-        "- If the task needs vendor project, dashboard, admin, paymaster, sponsorship, or policy configuration that is not present, ask for the exact missing values and explain why you need them. Do not invent IDs, admin tokens, paymaster policies, or sponsorship credentials.",
+        "- If BUNDLER_URL, PAYMASTER_URL, ZERODEV_PROJECT_ID, or any other vendor project/dashboard/paymaster/sponsorship config is empty or missing, stop and output a JSON block with `needs_user_input` listing the exact missing values and why you need them. Do this before adding fallback runtime errors. Do not invent IDs, admin tokens, paymaster policies, or sponsorship credentials.",
         "- Preserve existing starter code unless the task says to change it.",
         "- Do not edit benchmark runner files, graders, use_cases, or files outside this app.",
     ]
@@ -340,6 +359,7 @@ def _agent_prompt(
             "Use create_inbox to get a real @agentmail.to address for any signup or OTP flow.",
         ]
 
+    parts.append(_USER_INPUT_INSTRUCTION)
     parts.append(_SELF_REPORT_INSTRUCTION)
     return "\n".join(parts)
 
@@ -398,6 +418,7 @@ class _AgentState:
         self.turns_to_success: int | None = None         # turn# when grader first passed
         # Resource inventory: url -> {url, resource_type, access_method, times_accessed}
         self.doc_resource_inventory: dict[str, dict[str, Any]] = {}
+        self.requested_user_inputs: list[dict[str, Any]] = []
         # Raw text of the last assistant message (for self-report extraction)
         self.last_assistant_text: str = ""
 
@@ -897,6 +918,62 @@ def _extract_self_report(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_user_input_request(text: str) -> dict[str, Any] | None:
+    """Parse an agent JSON block asking the mock user for values."""
+    import re
+
+    candidates: list[str] = []
+    candidates.extend(re.findall(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL))
+    candidates.extend(re.findall(r'\{[^{}]*"needs_user_input"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL))
+
+    for block in reversed(candidates):
+        try:
+            data = json.loads(block)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        requested = data.get("needs_user_input")
+        if isinstance(requested, list) and requested:
+            return {
+                "reason": str(data.get("reason", "Agent requested missing user configuration.")),
+                "requested_values": requested,
+            }
+    return None
+
+
+def _infer_user_input_request(text: str) -> dict[str, Any] | None:
+    """Infer a mock-user request when the agent reports missing config in prose."""
+    upper = text.upper()
+    requested: list[dict[str, str]] = []
+    for name, why in (
+        ("ZERODEV_PROJECT_ID", "ZeroDev project identifier used to derive project RPC endpoints"),
+        ("BUNDLER_URL", "ZeroDev bundler RPC URL for sponsored user operations"),
+        ("PAYMASTER_URL", "ZeroDev paymaster RPC URL with sponsorship policy"),
+    ):
+        if name in upper:
+            requested.append({"name": name, "why_needed": why})
+    if not requested:
+        return None
+    return {
+        "reason": "Agent reported missing ZeroDev configuration.",
+        "requested_values": requested,
+    }
+
+
+def _mock_user_reply(state: _AgentState, request: dict[str, Any]) -> str:
+    """Return a user-message string with deterministic benchmark values."""
+    response = provide_user_input(request)
+    entry = {"request": request, "response": response}
+    state.requested_user_inputs.append(entry)
+    state.log("mock_user_input", entry)
+    return (
+        "Mock user response: here are the requested values from my project/config.\n"
+        "Use these values exactly where appropriate, do not invent additional credentials.\n"
+        "```json\n"
+        f"{json.dumps(response, indent=2)}\n"
+        "```"
+    )
+
+
 def _detect_mismatches(
     state: _AgentState, report: dict[str, Any]
 ) -> list[str]:
@@ -972,6 +1049,11 @@ def _run_loop_openai(
     client = OpenAI(
         api_key=os.environ.get("CHAT_GPT_API_KEY") or os.environ.get("OPENAI_API_KEY")
     )
+    if cfg.verbose:
+        print("  [prompt] BEGIN OpenAI prompt", flush=True)
+        print(system, flush=True)
+        print("  [prompt] END OpenAI prompt", flush=True)
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system},
         {"role": "user", "content": "Start the task."},
@@ -979,6 +1061,8 @@ def _run_loop_openai(
 
     total_in = total_out = 0
     turns = 0
+    mock_user_rounds = 0
+    max_mock_user_rounds = int(os.environ.get("DOCS_EVAL_MOCK_USER_ROUNDS", "1"))
     start = time.time()
     deadline = start + use_case.max_seconds
 
@@ -1052,6 +1136,19 @@ def _run_loop_openai(
             print(f"  [agent]   tools: {[tc.function.name for tc in tool_calls]}")
 
         if finish_reason == "stop" and not tool_calls:
+            if msg.content and mock_user_rounds < max_mock_user_rounds:
+                request = (
+                    _extract_user_input_request(msg.content)
+                    or _infer_user_input_request(msg.content)
+                )
+                if request:
+                    mock_user_rounds += 1
+                    reply = _mock_user_reply(state, request)
+                    messages.append({"role": "user", "content": reply})
+                    if cfg.verbose:
+                        print(f"  [mock-user] replied to request {mock_user_rounds}/{max_mock_user_rounds}", flush=True)
+                        print(reply, flush=True)
+                    continue
             if state.first_grader_pass is None:
                 state.log("note", "agent stopped without grading; running grader")
                 if cfg.verbose:
@@ -1117,7 +1214,6 @@ def _run_loop_claude(
     Returns (turns, total_input_tokens, total_output_tokens).
     """
     import shutil
-    import sys
     import tempfile
     import sys
 
@@ -1152,6 +1248,10 @@ def _run_loop_claude(
     # Claude -p takes one prompt; the shared agent prompt already includes the
     # task, docs context/hints, rules, and self-report instructions.
     full_prompt = system
+    if cfg.verbose:
+        print("  [prompt] BEGIN Claude prompt", flush=True)
+        print(full_prompt, flush=True)
+        print("  [prompt] END Claude prompt", flush=True)
 
     allowed_mcp = (
         "mcp__docs-eval__list_files,mcp__docs-eval__read_file,"
@@ -1428,44 +1528,11 @@ def _run_loop_codex(
             "Codex may also use its native file and shell tools when needed, but keep all edits inside the scaffold directory."
         ),
     )
-    transcript_base = Path(state.transcript_fp.name).with_suffix("")
-    codex_prompt_path = transcript_base.with_suffix(".codex.prompt.txt")
-    codex_events_path = transcript_base.with_suffix(".codex.jsonl")
-    codex_stderr_path = transcript_base.with_suffix(".codex.stderr.txt")
-    codex_final_path = transcript_base.with_suffix(".codex.final.txt")
-    codex_prompt_path.write_text(prompt, encoding="utf-8")
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, prefix="docs_eval_codex_last_"
-    ) as f:
-        last_message_path = f.name
-
-    cmd = ["codex"]
-    if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind"):
-        cmd.append("--search")
-    cmd += [
-        "exec",
-        "--cd", str(work_dir.resolve()),
-        "--sandbox", "workspace-write",
-        "--ephemeral",
-        "--ignore-user-config",
-        "--ignore-rules",
-        "--json",
-        "--output-last-message", last_message_path,
-        "--color", "never",
-    ]
-    if codex_model:
-        cmd += ["--model", codex_model]
-    cmd.append(prompt)
-
-    if cfg.verbose:
-        model_note = f" --model {codex_model}" if codex_model else ""
-        print(f"  [codex-cli] running: codex exec ...{model_note}")
-
     start = time.time()
     codex_timed_out = False
     codex_returncode: int | None = None
     codex_tokens_used = 0
+    transcript_base = Path(state.transcript_fp.name).with_suffix("")
     try:
         codex_timeout = int(
             os.environ.get(
@@ -1476,74 +1543,140 @@ def _run_loop_codex(
     except ValueError:
         codex_timeout = min(use_case.max_seconds, 180)
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=codex_timeout,
-        )
-        codex_returncode = proc.returncode
-        stdout = proc.stdout or ""
-        stderr = proc.stderr or ""
-        codex_events_path.write_text(stdout, encoding="utf-8")
-        codex_stderr_path.write_text(stderr, encoding="utf-8")
-        import re
-        token_match = re.search(r"tokens used\s+([\d,]+)", stdout + "\n" + stderr)
-        if token_match:
-            codex_tokens_used = int(token_match.group(1).replace(",", ""))
-        try:
-            final_text = Path(last_message_path).read_text(errors="replace")
-        except OSError:
-            final_text = ""
-        codex_final_path.write_text(final_text, encoding="utf-8")
-        if final_text:
-            state.last_assistant_text = final_text
-        state.log("codex_cli", {
-            "returncode": proc.returncode,
-            "prompt_path": str(codex_prompt_path),
-            "events_path": str(codex_events_path),
-            "stderr_path": str(codex_stderr_path),
-            "final_message_path": str(codex_final_path),
-            "stdout_tail": stdout[-4000:],
-            "stderr_tail": stderr[-4000:],
-            "final_message": final_text[-4000:],
-            "tokens_used": codex_tokens_used,
-            "wall_seconds": round(time.time() - start, 2),
-        })
-        if proc.returncode != 0 and cfg.verbose:
-            print(f"  [codex-cli] exited {proc.returncode}")
-            for ln in (stderr or stdout).strip().splitlines()[-8:]:
-                print(f"            {ln}")
-    except subprocess.TimeoutExpired as e:
-        codex_timed_out = True
-        stdout = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        codex_events_path.write_text(stdout, encoding="utf-8")
-        codex_stderr_path.write_text(stderr, encoding="utf-8")
-        try:
-            final_text = Path(last_message_path).read_text(errors="replace")
-        except OSError:
-            final_text = ""
-        codex_final_path.write_text(final_text, encoding="utf-8")
-        if final_text:
-            state.last_assistant_text = final_text
-        state.log("codex_cli_timeout", {
-            "prompt_path": str(codex_prompt_path),
-            "events_path": str(codex_events_path),
-            "stderr_path": str(codex_stderr_path),
-            "final_message_path": str(codex_final_path),
-            "stdout_tail": stdout[-4000:],
-            "stderr_tail": stderr[-4000:],
-            "after_seconds": codex_timeout,
-        })
+    max_mock_user_rounds = int(os.environ.get("DOCS_EVAL_MOCK_USER_ROUNDS", "1"))
+    mock_replies: list[str] = []
+    rounds_run = 0
+
+    for mock_round in range(max_mock_user_rounds + 1):
+        rounds_run = mock_round + 1
+        prompt_for_round = prompt
+        if mock_replies:
+            prompt_for_round += "\n\n--- MOCK USER FEEDBACK SO FAR ---\n"
+            prompt_for_round += "\n\n".join(mock_replies)
+            prompt_for_round += "\n--- END MOCK USER FEEDBACK ---\n"
+
+        suffix = "" if mock_round == 0 else f".mock{mock_round}"
+        codex_prompt_path = transcript_base.with_suffix(f".codex{suffix}.prompt.txt")
+        codex_events_path = transcript_base.with_suffix(f".codex{suffix}.jsonl")
+        codex_stderr_path = transcript_base.with_suffix(f".codex{suffix}.stderr.txt")
+        codex_final_path = transcript_base.with_suffix(f".codex{suffix}.final.txt")
+        codex_prompt_path.write_text(prompt_for_round, encoding="utf-8")
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, prefix="docs_eval_codex_last_"
+        ) as f:
+            last_message_path = f.name
+
+        cmd = ["codex"]
+        if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind"):
+            cmd.append("--search")
+        cmd += [
+            "exec",
+            "--cd", str(work_dir.resolve()),
+            "--sandbox", "workspace-write",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--json",
+            "--output-last-message", last_message_path,
+            "--color", "never",
+        ]
+        if codex_model:
+            cmd += ["--model", codex_model]
+        cmd.append(prompt_for_round)
+
         if cfg.verbose:
-            print(f"  [codex-cli] TIMEOUT after {codex_timeout}s")
-    finally:
+            model_note = f" --model {codex_model}" if codex_model else ""
+            print(f"  [codex-cli] running round {mock_round + 1}: codex exec ...{model_note}", flush=True)
+            print(f"  [prompt] BEGIN Codex prompt round {mock_round + 1}", flush=True)
+            print(prompt_for_round, flush=True)
+            print(f"  [prompt] END Codex prompt round {mock_round + 1}", flush=True)
+
         try:
-            os.unlink(last_message_path)
-        except OSError:
-            pass
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=codex_timeout,
+            )
+            codex_returncode = proc.returncode
+            stdout = proc.stdout or ""
+            stderr = proc.stderr or ""
+            codex_events_path.write_text(stdout, encoding="utf-8")
+            codex_stderr_path.write_text(stderr, encoding="utf-8")
+            import re
+            token_match = re.search(r"tokens used\s+([\d,]+)", stdout + "\n" + stderr)
+            if token_match:
+                codex_tokens_used += int(token_match.group(1).replace(",", ""))
+            try:
+                final_text = Path(last_message_path).read_text(errors="replace")
+            except OSError:
+                final_text = ""
+            codex_final_path.write_text(final_text, encoding="utf-8")
+            if final_text:
+                state.last_assistant_text = final_text
+            state.log("codex_cli", {
+                "round": mock_round + 1,
+                "returncode": proc.returncode,
+                "prompt_path": str(codex_prompt_path),
+                "events_path": str(codex_events_path),
+                "stderr_path": str(codex_stderr_path),
+                "final_message_path": str(codex_final_path),
+                "stdout_tail": stdout[-4000:],
+                "stderr_tail": stderr[-4000:],
+                "final_message": final_text[-4000:],
+                "tokens_used": codex_tokens_used,
+                "wall_seconds": round(time.time() - start, 2),
+            })
+            if proc.returncode != 0 and cfg.verbose:
+                print(f"  [codex-cli] exited {proc.returncode}")
+                for ln in (stderr or stdout).strip().splitlines()[-8:]:
+                    print(f"            {ln}")
+        except subprocess.TimeoutExpired as e:
+            codex_timed_out = True
+            stdout = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+            stderr = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+            codex_events_path.write_text(stdout, encoding="utf-8")
+            codex_stderr_path.write_text(stderr, encoding="utf-8")
+            try:
+                final_text = Path(last_message_path).read_text(errors="replace")
+            except OSError:
+                final_text = ""
+            codex_final_path.write_text(final_text, encoding="utf-8")
+            if final_text:
+                state.last_assistant_text = final_text
+            state.log("codex_cli_timeout", {
+                "round": mock_round + 1,
+                "prompt_path": str(codex_prompt_path),
+                "events_path": str(codex_events_path),
+                "stderr_path": str(codex_stderr_path),
+                "final_message_path": str(codex_final_path),
+                "stdout_tail": stdout[-4000:],
+                "stderr_tail": stderr[-4000:],
+                "after_seconds": codex_timeout,
+            })
+            if cfg.verbose:
+                print(f"  [codex-cli] TIMEOUT after {codex_timeout}s")
+        finally:
+            try:
+                os.unlink(last_message_path)
+            except OSError:
+                pass
+
+        if codex_returncode not in (0, None) or codex_timed_out:
+            break
+
+        request = (
+            _extract_user_input_request(state.last_assistant_text)
+            or _infer_user_input_request(state.last_assistant_text)
+        )
+        if not request or mock_round >= max_mock_user_rounds:
+            break
+        reply = _mock_user_reply(state, request)
+        mock_replies.append(reply)
+        if cfg.verbose:
+            print(f"  [mock-user] replied to request {mock_round + 1}/{max_mock_user_rounds}", flush=True)
+            print(reply, flush=True)
 
     if codex_returncode not in (0, None):
         if cfg.verbose:
@@ -1562,7 +1695,7 @@ def _run_loop_codex(
 
     # Codex CLI reports a single aggregate token count, not input/output split.
     # Store it in input_tokens so existing reports include the usage total.
-    return 1, codex_tokens_used, 0
+    return rounds_run, codex_tokens_used, 0
 
 
 # --- Main run loop ---------------------------------------------------------
@@ -1714,7 +1847,7 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
 
     if cfg.verbose:
         print(f"  [agent] starting — budget: {use_case.max_turns} turns / "
-              f"{use_case.max_seconds}s")
+              f"{use_case.max_seconds}s", flush=True)
 
     backend = cfg.backend
     if backend == "auto":
@@ -1785,6 +1918,7 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
             "turns_to_first_grader": state.turns_to_first_grader,
             "turns_to_success": state.turns_to_success,
             "doc_resources": doc_resources,
+            "requested_user_inputs": state.requested_user_inputs,
         })
         transcript_fp.close()
 
@@ -1832,6 +1966,7 @@ def run_cell(use_case: UseCase, target: Target, mode: str, run_idx: int,
         doc_resources=doc_resources,
         agent_self_report=self_report,
         self_report_mismatches=mismatches,
+        requested_user_inputs=state.requested_user_inputs,
     )
 
 

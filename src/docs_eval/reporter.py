@@ -326,6 +326,37 @@ def render_markdown(results: list[RunResult]) -> str:
             )
         lines.append("")
 
+    # ---- User input requests ----
+    input_rows = [r for r in results if r.requested_user_inputs]
+    if input_rows:
+        lines.append("## User input requests")
+        lines.append("")
+        lines.append("| target | mode | run | requested | provided | missing |")
+        lines.append("|---|---|---|---|---|---|")
+        for r in sorted(input_rows, key=lambda r: (r.target_name, r.mode, r.run_idx)):
+            requested: list[str] = []
+            provided: list[str] = []
+            missing: list[str] = []
+            for entry in r.requested_user_inputs:
+                request = entry.get("request", entry)
+                response = entry.get("response", {})
+                for item in request.get("requested_values") or []:
+                    if isinstance(item, dict) and item.get("name"):
+                        requested.append(str(item["name"]))
+                provided.extend(str(k) for k in (response.get("values") or {}).keys())
+                missing.extend(
+                    str(item.get("name", ""))
+                    for item in (response.get("missing") or [])
+                    if isinstance(item, dict)
+                )
+            lines.append(
+                f"| {r.target_name} | {r.mode} | r{r.run_idx} "
+                f"| {', '.join(requested) or '—'} "
+                f"| {', '.join(provided) or '—'} "
+                f"| {', '.join(missing) or '—'} |"
+            )
+        lines.append("")
+
     # ---- Self-report summary ----
     self_reported = [r for r in results if r.agent_self_report is not None]
     if self_reported:
