@@ -52,7 +52,10 @@ def main():
               type=click.Path(file_okay=False),
               help="Output directory. Defaults to results/YYYYMMDD-HHMM.")
 @click.option("--model", default=None,
-              help="Override Claude model. Default from $DOCS_EVAL_MODEL.")
+              help="Override model. Default from $DOCS_EVAL_MODEL.")
+@click.option("--backend", default=None,
+              type=click.Choice(["auto", "claude", "openai", "codex"]),
+              help="Agent backend. Defaults to $DOCS_EVAL_BACKEND or auto.")
 @click.option("--verbose", is_flag=True, help="Print agent/grader output live.")
 @click.option("--human-review", "human_review", is_flag=True,
               help="After each passing cell, start the app and ask you to confirm "
@@ -61,7 +64,7 @@ def main():
 @click.option("--skip-smoke", is_flag=True,
               help="Skip smoke tests (scaffold/typecheck/mcp checks) before running.")
 def run(use_case_patterns, use_cases_root, target_names, targets_file,
-        modes, runs, out_dir, model, verbose, human_review, dry_run, skip_smoke):
+        modes, runs, out_dir, model, backend, verbose, human_review, dry_run, skip_smoke):
     """Execute the eval matrix."""
     uc_root = Path(use_cases_root)
     patterns = list(use_case_patterns) or None
@@ -144,6 +147,7 @@ def run(use_case_patterns, use_cases_root, target_names, targets_file,
         work_root=work_root,
         transcript_root=transcript_root,
         model=model or RunnerConfig.model,
+        backend=backend or RunnerConfig.backend,
         verbose=verbose,
         human_review=human_review,
     )
