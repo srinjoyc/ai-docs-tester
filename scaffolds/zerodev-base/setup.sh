@@ -80,7 +80,10 @@ export const SMART_ROUTING_SERVER_URL =
 EOF
 
 # -- install dependencies (cached) --------------------------------------------
-CACHE_DIR="/tmp/docs-eval-cache/zerodev-base-v8"
+# Avoid /tmp — on macOS /tmp is a symlink to /private/tmp, which causes
+# Node.js to find two React module cache entries and break SSR hooks.
+# Use XDG_CACHE_HOME if set (Linux standard), else ~/.cache (works everywhere).
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/docs-eval/zerodev-base-v9"
 if [ ! -d "$CACHE_DIR/node_modules" ]; then
   mkdir -p "$CACHE_DIR"
   # next@15 pinned: Next.js 16 uses Turbopack by default which rejects symlinks

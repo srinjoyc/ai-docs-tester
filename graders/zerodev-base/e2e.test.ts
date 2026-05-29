@@ -26,7 +26,8 @@ const ZERODEV_PROJECT_ID = process.env.ZERODEV_PROJECT_ID || "";
 const REAL_MODE = Boolean(PRIVATE_KEY && ZERODEV_PROJECT_ID);
 const GRADER_SCENARIO = process.env.GRADER_SCENARIO || "default";
 
-const ARB_SEPOLIA_RPC = "https://sepolia-rollup.arbitrum.io/rpc";
+// Real-mode on-chain verification only — not used in mock mode
+const ARB_SEPOLIA_RPC = process.env.RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc";
 const ARB_SEPOLIA_CHAIN_ID_HEX = "0x66eee"; // 421614
 const ARB_SEPOLIA_CHAIN_ID_DEC = "421614";
 
@@ -168,6 +169,52 @@ async function setupMockNetwork(page: Page) {
       case "eth_getUserOperationByHash":
         return route.fulfill({ json: { jsonrpc: "2.0", id, result: null } });
 
+      // ── Standard Ethereum RPC — mocked so mock-mode never needs a real network ──
+      case "eth_chainId":
+        return route.fulfill({
+          json: { jsonrpc: "2.0", id, result: ARB_SEPOLIA_CHAIN_ID_HEX },
+        });
+
+      case "eth_blockNumber":
+        return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x1" } });
+
+      case "eth_getTransactionCount":
+        return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x0" } });
+
+      case "eth_getBalance":
+        return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x0" } });
+
+      case "eth_getCode":
+        // Return empty bytecode — account not yet deployed (counterfactual)
+        return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x" } });
+
+      case "eth_call":
+        // ABI-encoded address (32 bytes): 12 zero bytes + 20-byte fake kernel address.
+        // Must be non-zero — the SDK validates the factory response and rejects 0x0.
+        return route.fulfill({
+          json: { jsonrpc: "2.0", id, result: "0x000000000000000000000000" + FAKE_PAYMASTER.slice(2) },
+        });
+
+      case "eth_getTransactionReceipt":
+        return route.fulfill({ json: { jsonrpc: "2.0", id, result: null } });
+
+      case "eth_gasPrice":
+      case "eth_maxPriorityFeePerGas":
+        return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x3B9ACA00" } });
+
+      case "eth_feeHistory":
+        return route.fulfill({
+          json: {
+            jsonrpc: "2.0", id,
+            result: {
+              baseFeePerGas: ["0x5F5E100"],
+              gasUsedRatio: [0.5],
+              oldestBlock: "0x1",
+              reward: [["0x3B9ACA00"]],
+            },
+          },
+        });
+
       case "eth_getUserOperationReceipt":
         return route.fulfill({
           json: {
@@ -198,20 +245,11 @@ async function setupMockNetwork(page: Page) {
         });
 
       default: {
-        try {
-          const r = await fetch(ARB_SEPOLIA_RPC, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: req.postData()!,
-          });
-          return route.fulfill({
-            status: r.status,
-            contentType: "application/json",
-            body: await r.text(),
-          });
-        } catch {
-          return route.continue();
-        }
+        // Unknown method — log it so we can spot missing mocks, then fail fast.
+        console.warn(`[mock] unmocked RPC method: ${method}`);
+        return route.fulfill({
+          json: { jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } },
+        });
       }
     }
   });
@@ -287,21 +325,11 @@ async function injectWallet(page: Page, address: string, realSigning: boolean) {
               }
               return '0x' + 'abcdef12'.repeat(8) + '1b';
             }
-            default: {
-              try {
-                const resp = await fetch('${ARB_SEPOLIA_RPC}', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: params || [] }),
-                });
-                const data = await resp.json();
-                if (data.error) throw new Error(data.error.message);
-                return data.result;
-              } catch (e) {
-                console.warn('[mock-wallet] RPC fallback failed for', method, e);
-                return null;
-              }
-            }
+            default:
+              // All browser requests are intercepted by setupMockNetwork, so this
+              // fetch hits the mock which returns "method not found" immediately.
+              console.warn('[mock-wallet] unhandled method:', method);
+              return null;
           }
         },
         on(event, handler) {
