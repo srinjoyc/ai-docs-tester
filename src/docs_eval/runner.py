@@ -1095,7 +1095,6 @@ def _run_loop_claude(
         "--output-format", "stream-json",
         "--max-turns", str(use_case.max_turns + 3),  # +3 absorbs ToolSearch internal overhead
         "--model", cfg.model,
-        "--bare",  # skip auto-memory, CLAUDE.md, hooks, plugins — fresh context every run
         "--allowedTools", allowed_mcp,
         "--disallowedTools", _native_blocked,
         "--verbose",  # required by claude CLI when using --output-format stream-json
@@ -1104,10 +1103,18 @@ def _run_loop_claude(
     if cfg.verbose:
         print(f"  [claude-cli] running: claude -p ... --model {cfg.model}")
 
+    # Run from HOME, not the docs-eval project root. If we ran from the project
+    # root, claude would find the project git repo and inject project-specific
+    # memory (our debug notes about ZeroDev APIs, root causes, etc.) into the
+    # agent's context — contaminating the doc-quality signal.
+    # Running from HOME keeps auth (keychain) working while avoiding project memory.
+    _cwd = Path.home()
+
     start = time.time()
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
+            cwd=_cwd,
             timeout=use_case.max_seconds + 30,  # slight buffer over agent budget
         )
         raw_output = proc.stdout
