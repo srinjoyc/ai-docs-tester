@@ -7,7 +7,8 @@
 # - vendor: which vendor's docs this represents (so we know which use cases apply)
 # - platform: which doc platform hosts this (mintlify, fern, vocs, gitbook, readme, docusaurus, custom)
 # - base_url: docs homepage
-# - llms_txt: full URL to llms-full.txt (or llms.txt if -full not available). null if not present.
+# - llms_txt: URL to the condensed llms.txt (preferred for llms-txt mode). null if not present.
+#             For the full llms-full.txt, add a separate target with the -full suffix in the name.
 # - mcp_endpoint: MCP server URL. null if not present.
 # - markdown_suffix: e.g. ".md" if the platform serves <url>.md. null otherwise.
 # - notes: free-form for the report
@@ -17,12 +18,22 @@ targets:
   # ---- ZeroDev ----
   - name: zerodev-current
     vendor: zerodev
-    platform: custom         # docs.zerodev.app — check what they're currently on
+    platform: custom
     base_url: https://docs.zerodev.app
-    llms_txt: https://docs.zerodev.app/llms-full.txt
-    mcp_endpoint: null       # FILL IN
-    markdown_suffix: null    # FILL IN
-    notes: "Current production docs. The baseline."
+    llms_txt: https://docs.zerodev.app/llms.txt      # condensed (~70K chars)
+    mcp_endpoint: null
+    markdown_suffix: null
+    notes: "Current production docs — llms-txt mode uses condensed llms.txt."
+    enabled: true
+
+  - name: zerodev-current-full
+    vendor: zerodev
+    platform: custom
+    base_url: https://docs.zerodev.app
+    llms_txt: https://docs.zerodev.app/llms-full.txt  # full (~1.7M chars)
+    mcp_endpoint: null
+    markdown_suffix: null
+    notes: "Current production docs — llms-txt mode uses full llms-full.txt."
     enabled: true
 
   - name: zerodev-mintlify-staging
