@@ -678,7 +678,7 @@ def _claude_mcp_server_args(
     run_script = Path(grader_cfg["run"])
     if not run_script.is_absolute():
         project_root = use_case.source_path.parents[2]
-        run_script = project_root / run_script
+        run_script = (project_root / run_script).resolve()  # must be absolute: subprocess runs from HOME
     grader_env_extra = {k: str(v) for k, v in grader_cfg.get("env", {}).items()}
 
     args = [
@@ -1387,6 +1387,15 @@ def _run_loop_claude(
                 turns += 1
                 if text_block:
                     state.last_assistant_text = text_block
+                    # Detect and log needs_user_input blocks (observability only —
+                    # the Claude CLI is a single subprocess so we can't inject a
+                    # mid-run reply the way the OpenAI/Codex paths do).
+                    _user_req = (
+                        _extract_user_input_request(text_block)
+                        or _infer_user_input_request(text_block)
+                    )
+                    if _user_req:
+                        _mock_user_reply(state, _user_req)
                 state.log("assistant", {
                     "turn": turns,
                     "stop_reason": msg.get("stop_reason"),
