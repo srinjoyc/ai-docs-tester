@@ -17,6 +17,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { encodeErrorResult } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -32,9 +33,11 @@ const ARB_SEPOLIA_CHAIN_ID_HEX = "0x66eee"; // 421614
 const ARB_SEPOLIA_CHAIN_ID_DEC = "421614";
 
 const MOCK_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+const FAKE_KERNEL_ADDRESS = "0x1111111111111111111111111111111111111111";
 const FAKE_USEROP_HASH =
   "0xefefefef00000000000000000000000000000000000000000000000000000000";
 const FAKE_PAYMASTER = "0xDFF7FA1077Bce740a6a212b3995990682c0Ba66d";
+const GET_SENDER_ADDRESS_SELECTOR = "0x9b249f69";
 
 // Tracks how many eth_sendUserOperation calls have been made this test run
 const mockState = { sendUserOpCount: 0 };
@@ -188,12 +191,37 @@ async function setupMockNetwork(page: Page) {
         // Return empty bytecode — account not yet deployed (counterfactual)
         return route.fulfill({ json: { jsonrpc: "2.0", id, result: "0x" } });
 
-      case "eth_call":
-        // ABI-encoded address (32 bytes): 12 zero bytes + 20-byte fake kernel address.
-        // Must be non-zero — the SDK validates the factory response and rejects 0x0.
+      case "eth_call": {
+        const call = Array.isArray(body.params) ? body.params[0] : undefined;
+        const data = typeof call === "object" && call && "data" in call
+          ? String((call as { data?: unknown }).data)
+          : "";
+        if (data.startsWith(GET_SENDER_ADDRESS_SELECTOR)) {
+          return route.fulfill({
+            json: {
+              jsonrpc: "2.0", id,
+              error: {
+                code: 3,
+                message: "execution reverted",
+                data: encodeErrorResult({
+                  abi: [{
+                    inputs: [{ internalType: "address", name: "sender", type: "address" }],
+                    name: "SenderAddressResult",
+                    type: "error",
+                  }],
+                  errorName: "SenderAddressResult",
+                  args: [FAKE_KERNEL_ADDRESS],
+                }),
+              },
+            },
+          });
+        }
+        // ABI-encoded address (32 bytes): 12 zero bytes + 20-byte fake address.
+        // Must be non-zero for SDK paths that still accept a direct eth_call result.
         return route.fulfill({
           json: { jsonrpc: "2.0", id, result: "0x000000000000000000000000" + FAKE_PAYMASTER.slice(2) },
         });
+      }
 
       case "eth_getTransactionReceipt":
         return route.fulfill({ json: { jsonrpc: "2.0", id, result: null } });

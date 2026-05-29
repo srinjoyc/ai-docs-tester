@@ -1374,6 +1374,9 @@ def _run_loop_codex(
         "exec",
         "--cd", str(work_dir.resolve()),
         "--sandbox", "workspace-write",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
         "--output-last-message", last_message_path,
         "--color", "never",
     ]
