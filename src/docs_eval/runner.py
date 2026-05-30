@@ -301,7 +301,7 @@ def _agent_prompt(
         "- Treat the target docs location as authoritative for this run.",
         "- Write TypeScript with proper types — no `any`, no missing imports.",
         "- Read config/env from existing files; don't hardcode secrets.",
-        "- If BUNDLER_URL, PAYMASTER_URL, ZERODEV_PROJECT_ID, or any other vendor project/dashboard/paymaster/sponsorship config is empty or missing, stop and output a JSON block with `needs_user_input` listing the exact missing values and why you need them. Do this before adding fallback runtime errors. Do not invent IDs, admin tokens, paymaster policies, or sponsorship credentials.",
+        "- If BUNDLER_URL, PAYMASTER_URL, ZERODEV_PROJECT_ID, or any other vendor project/dashboard/paymaster/sponsorship config is empty or missing, call request_user_input with the missing values before implementing. Do not invent IDs, admin tokens, paymaster policies, or sponsorship credentials.",
         "- Preserve existing starter code unless the task says to change it.",
         "- Do not edit benchmark runner files, graders, use_cases, or files outside this app.",
     ]
@@ -1255,7 +1255,8 @@ def _run_loop_claude(
 
     allowed_mcp = (
         "mcp__docs-eval__list_files,mcp__docs-eval__read_file,"
-        "mcp__docs-eval__write_file,mcp__docs-eval__run_grader"
+        "mcp__docs-eval__write_file,mcp__docs-eval__run_grader,"
+        "mcp__docs-eval__request_user_input"
         + (",mcp__docs-eval__fetch_url" if mode in ("web", "web-ai-informed", "auto-informed", "auto-blind") else "")
         + (
             ",mcp__docs-eval__search_docs,mcp__docs-eval__query_docs_filesystem"

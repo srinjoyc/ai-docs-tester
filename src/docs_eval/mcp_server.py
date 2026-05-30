@@ -105,6 +105,11 @@ def _run_grader(grader_script: str, work_dir: Path, grader_env: dict) -> str:
         return json.dumps({"pass": False, "stdout": "", "stderr": "GRADER TIMEOUT after 240s"})
 
 
+def _request_user_input(args: dict) -> str:
+    from .user_inputs import provide_user_input
+    return json.dumps(provide_user_input(args))
+
+
 def _fetch_url(url: str) -> str:
     try:
         r = httpx.get(url, timeout=15, follow_redirects=True,
@@ -161,6 +166,32 @@ def _build_tool_schemas(enable_fetch: bool) -> list[dict]:
             "description": "Typecheck the project and verify required imports/calls. "
                            "Returns pass/fail + compiler errors. Fix errors and call again.",
             "inputSchema": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "name": "request_user_input",
+            "description": "Ask the benchmark runner for vendor configuration values that "
+                           "aren't in the scaffold (e.g. BUNDLER_URL, PAYMASTER_URL, "
+                           "ZERODEV_PROJECT_ID). Use this instead of outputting a "
+                           "needs_user_input JSON block. Returns the provided values or "
+                           "explains why a value isn't available.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Why you need these values."},
+                    "requested_values": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "why_needed": {"type": "string"},
+                            },
+                            "required": ["name"],
+                        },
+                    },
+                },
+                "required": ["requested_values"],
+            },
         },
     ]
     if enable_fetch:
@@ -225,6 +256,8 @@ def _main() -> None:
                     result = _write_file(work_dir, tool_args["path"], tool_args["content"])
                 elif name == "run_grader":
                     result = _run_grader(args.grader_script, work_dir, grader_env)
+                elif name == "request_user_input":
+                    result = _request_user_input(tool_args)
                 elif name == "fetch_url" and args.enable_fetch:
                     result = _fetch_url(tool_args["url"])
                 else:
