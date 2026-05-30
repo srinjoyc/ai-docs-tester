@@ -1,0 +1,47 @@
+name: Pre-merge smoke
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  verified-smoke:
+    name: Verified smoke subset
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      ALLOW_MOCK_FALLBACK: "1"
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/docs-eval-pw-browsers
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python package
+        run: python -m pip install -e .
+
+      - name: Install Playwright browser dependencies
+        run: npx --yes playwright install --with-deps chromium
+
+      - name: Compile Python sources
+        run: python -m compileall -q src
+
+      - name: Run ZeroDev smoke test
+        run: >
+          python -m docs_eval.cli smoke
+          --use-cases "zerodev/01-kernel-account-ecdsa.yaml"
+          --verbose
