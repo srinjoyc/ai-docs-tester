@@ -17,6 +17,7 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 load_dotenv()
+load_dotenv(".env.test", override=False)  # load test credentials for provide_user_input
 from rich.console import Console
 from rich.progress import (BarColumn, Progress, SpinnerColumn,
                             TaskProgressColumn, TextColumn, TimeElapsedColumn)
